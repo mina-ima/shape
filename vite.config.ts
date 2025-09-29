@@ -10,6 +10,8 @@ export default defineConfig({
     globals: true,
     environment: "jsdom",
     setupFiles: "./src/test/setup.ts",
+    include: ["src/**/*.test.{ts,tsx}"],
+    environmentMatchGlobs: [["src/core/pwa.test.ts", "node"]],
   },
   resolve: {
     alias: {
