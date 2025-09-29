@@ -1,0 +1,24 @@
+
+# ユーザー設定: 日本語での対話を優先する
+
+# .gemini/commands/go.toml
+
+# コマンド名 (/go として使用されます)
+name = "go"
+
+# コマンドの簡単な説明
+description = "次の開発ステップを一つ実行します。テスト作成、実装、フォーマット、リント、テスト実行、コミットまでを順に行います。"
+
+# モデルに送信されるプロンプト
+prompt = """
+Open @prompt_spec.md and @todo.md.
+Pick exactly ONE incomplete step.
+
+Do:
+1) Write failing tests first (Vitest + RTL).
+2) Implement code to pass tests.
+3) Run: pnpm format && pnpm lint && pnpm typecheck && pnpm test
+4) If all pass, git commit -m "<日本語でmeaningful message>"
+5) Update prompt_spec.md and todo.md
+6) Stop and ask to continue
+"""
