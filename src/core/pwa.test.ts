@@ -21,4 +21,10 @@ describe("PWA setup", () => {
     const viteConfigContent = fs.readFileSync(viteConfigPath, "utf-8");
     expect(viteConfigContent).toContain("VitePWA");
   });
+
+  it("should not have runtimeCaching configured in vite.config.ts yet", () => {
+    const viteConfigPath = path.resolve(__dirname, "../../vite.config.ts");
+    const viteConfigContent = fs.readFileSync(viteConfigPath, "utf-8");
+    expect(viteConfigContent).toContain("runtimeCaching");
+  });
 });
