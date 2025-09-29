@@ -82,10 +82,13 @@ export default defineConfig({
   ],
   test: {
     globals: true,
-    environment: "jsdom",
     setupFiles: "./src/test/setup.ts",
     include: ["src/**/*.test.{ts,tsx}"],
-    environmentMatchGlobs: [["src/core/pwa.test.ts", "node"]],
+    browser: {
+      enabled: true,
+      name: "chromium",
+      provider: "playwright",
+    },
   },
   resolve: {
     alias: {
