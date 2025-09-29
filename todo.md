@@ -52,14 +52,14 @@
   - **Verify**: 拒否時に自動でギャラリー選択へ。
 - [x] 端末ファイル選択（PhotoPicker/`<input type=file>`）。
   - **Verify**: HEICでも `createImageBitmap` 経由で表示可。
-- [ ] EXIF向き補正 & 受領画像の長辺最大 **1440px** に縮小。
+- [x] EXIF向き補正 & 受領画像の長辺最大 **1440px** に縮小。
   - **Verify**: ランドスケープ/ポートレイト双方で正しい向き。
 
 ## 4. セグメンテーション（自動切り抜き）
 
-- [ ] ONNX Runtime Web を導入（WASM + WebGL/WebGPU 有効化）。
+- [x] ONNX Runtime Web を導入（WASM + WebGL/WebGPU 有効化）。
   - **Verify**: feature detect で backend 選択。
-- [ ] U²-Net（軽量版）を 320/512 入力で推論、αマスク生成。
+- [x] U²-Net（軽量版）を 320/512 入力で推論、αマスク生成。
   - **Verify**: A14/中位Androidで **<300ms**（WASM SIMD）/ **<120ms**（WebGL）。
 - [ ] 後処理：開閉処理→ガウシアン（フェザー 3–5px）。
   - **Verify**: 境界が滑らか、穴あき低減。
