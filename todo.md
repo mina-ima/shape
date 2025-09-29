@@ -48,7 +48,7 @@
 
 ## 3. 画像入力（カメラ/ファイル）
 
-- [ ] カメラ取得 `getUserMedia`（権限拒否ハンドル）。
+- [x] カメラ取得 `getUserMedia`（権限拒否ハンドル）。
   - **Verify**: 拒否時に自動でギャラリー選択へ。
 - [ ] 端末ファイル選択（PhotoPicker/`<input type=file>`）。
   - **Verify**: HEICでも `createImageBitmap` 経由で表示可。
