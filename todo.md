@@ -3,13 +3,14 @@
 > このチェックリストに従えば、MVPを**フロントエンド単体**で完成できます。各項目は**Doneの定義**と**検証方法**を含みます。
 
 ## 0. プロジェクト初期化 / 基盤
-- [x] Node.js LTS を使用（v18+）。`nvmrc` を作成。  
+
+- [x] Node.js LTS を使用（v18+）。`nvmrc` を作成。
   - **Verify**: `node -v` が LTS、CIでも一致。
-- [x] Vite + TypeScript + React で雛形生成（PWAプラグイン導入）。  
+- [x] Vite + TypeScript + React で雛形生成（PWAプラグイン導入）。
   - **Verify**: `pnpm dev` 起動、`/` が表示。
-- [x] 状態管理に Zustand を導入（小規模・軽量）。  
+- [x] 状態管理に Zustand を導入（小規模・軽量）。
   - **Verify**: サンプルstoreのget/setが動作。
-- [x] ESLint + Prettier + TypeCheck（`tsc --noEmit`）を CI に組込み。  
+- [x] ESLint + Prettier + TypeCheck（`tsc --noEmit`）を CI に組込み。
   - **Verify**: `pnpm lint` / `pnpm typecheck` が成功。
 - [x] パスエイリアス `@/` を `src/` に設定する
   - **Verify**: 相対パス削減、ビルド成功。
