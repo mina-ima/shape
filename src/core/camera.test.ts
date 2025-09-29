@@ -11,4 +11,9 @@ describe("Camera module", () => {
     // @ts-expect-error: selectImageFile does not exist yet
     expect(camera.selectImageFile).toBeDefined();
   });
+
+  it("should not have processImage function yet", () => {
+    // @ts-expect-error: processImage does not exist yet
+    expect(camera.processImage).toBeDefined();
+  });
 });

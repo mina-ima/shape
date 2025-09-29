@@ -50,7 +50,7 @@
 
 - [x] カメラ取得 `getUserMedia`（権限拒否ハンドル）。
   - **Verify**: 拒否時に自動でギャラリー選択へ。
-- [ ] 端末ファイル選択（PhotoPicker/`<input type=file>`）。
+- [x] 端末ファイル選択（PhotoPicker/`<input type=file>`）。
   - **Verify**: HEICでも `createImageBitmap` 経由で表示可。
 - [ ] EXIF向き補正 & 受領画像の長辺最大 **1440px** に縮小。
   - **Verify**: ランドスケープ/ポートレイト双方で正しい向き。
