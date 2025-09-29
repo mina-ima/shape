@@ -43,7 +43,7 @@
   - **Verify**: オフライン時でもUI表示可（素材検索は不可）。
 - [x] runtime cache：素材サムネは `StaleWhileRevalidate`。
   - **Verify**: 2回目アクセスでネットワーク節約。
-- [ ] SRI（Subresource Integrity）でモデル/wasmにハッシュ付与。
+- [x] SRI（Subresource Integrity）でモデル/wasmにハッシュ付与。
   - **Verify**: 改ざん時にロード失敗を検出。
 
 ## 3. 画像入力（カメラ/ファイル）
