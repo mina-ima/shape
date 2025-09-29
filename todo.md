@@ -41,7 +41,7 @@
 
 - [x] Workbox で precache：`u2net.onnx`, `wasm/*.wasm`, UI静的資産。
   - **Verify**: オフライン時でもUI表示可（素材検索は不可）。
-- [ ] runtime cache：素材サムネは `StaleWhileRevalidate`。
+- [x] runtime cache：素材サムネは `StaleWhileRevalidate`。
   - **Verify**: 2回目アクセスでネットワーク節約。
 - [ ] SRI（Subresource Integrity）でモデル/wasmにハッシュ付与。
   - **Verify**: 改ざん時にロード失敗を検出。

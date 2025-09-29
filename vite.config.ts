@@ -9,8 +9,10 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
-      registerType: "autoUpdate",
-      injectRegister: "auto",
+      injectManifest: {
+        injectionPoint: undefined,
+      },
+      swSrc: "src/sw.ts",
       workbox: {
         globPatterns: ["**/*.{js,css,html,ico,png,svg,wasm,onnx}"],
         runtimeCaching: [
