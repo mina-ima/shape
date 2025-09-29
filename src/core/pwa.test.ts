@@ -15,4 +15,10 @@ describe("PWA setup", () => {
 
     expect(hasVitePluginPwa).toBeTruthy();
   });
+
+  it("should not have VitePWA plugin configured in vite.config.ts yet", () => {
+    const viteConfigPath = path.resolve(__dirname, "../../vite.config.ts");
+    const viteConfigContent = fs.readFileSync(viteConfigPath, "utf-8");
+    expect(viteConfigContent).toContain("VitePWA");
+  });
 });
