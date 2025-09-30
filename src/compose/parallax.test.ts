@@ -59,9 +59,11 @@ describe("Layer Generation", () => {
 
     // Verify transparency in foreground
     // Left half of FG should be transparent (alpha = 0)
-    expect(foreground.data[3]).toBe(0);
+    expect(foreground.data[3]).toBe(0); // y=0, x=0, alpha
     // Right half of FG should be opaque (alpha = 255)
-    expect(foreground.data[width * 4 + 3]).toBe(255);
+    // Check a pixel on the right half (e.g., x=width-1, y=0) which should be opaque
+    const rightPixelIndex = (width - 1) * 4 + 3;
+    expect(foreground.data[rightPixelIndex]).toBe(255);
 
     originalImage.delete();
     alphaMask.delete();
@@ -100,7 +102,8 @@ describe("Parallax Animation", () => {
       width,
       height,
       duration,
-      fps
+      fps,
+      0, // crossfadeDuration
     );
 
     expect(frames).toBeDefined();
@@ -120,6 +123,54 @@ describe("Parallax Animation", () => {
     // Frame at end
     const frameEnd = frames[totalFrames - 1];
     expect(frameEnd).toBeDefined();
+
+    foregroundLayer.delete();
+    backgroundLayer.delete();
+    frames.forEach((f) => f.delete());
+  });
+
+  it("should apply crossfade to the start and end of the animation", async () => {
+    const width = 100;
+    const height = 100;
+    const duration = 5; // seconds
+    const fps = 30;
+    const totalFrames = duration * fps;
+    const crossfadeDuration = 1; // second
+
+    const fgData = new Uint8Array(width * height * 4).fill(255);
+    const bgData = new Uint8Array(width * height * 3).fill(128);
+    const foregroundLayer = new cv.Mat(height, width, cv.CV_8UC4);
+    foregroundLayer.data.set(fgData);
+    const backgroundLayer = new cv.Mat(height, width, cv.CV_8UC3);
+    backgroundLayer.data.set(bgData);
+
+    const frames = await generateParallaxFrames(
+      cv,
+      foregroundLayer,
+      backgroundLayer,
+      width,
+      height,
+      duration,
+      fps,
+      crossfadeDuration,
+    );
+
+    expect(frames.length).toBe(totalFrames);
+
+    // Frame 0 (start) - should be almost fully transparent
+    const frame0 = frames[0];
+    const frame0Alpha = frame0.data[3]; // Alpha of the first pixel
+    expect(frame0Alpha).toBeLessThan(50);
+
+    // Frame in the middle - should be fully opaque
+    const frameMid = frames[Math.floor(totalFrames / 2)];
+    const frameMidAlpha = frameMid.data[3];
+    expect(frameMidAlpha).toBe(255);
+
+    // Last frame - should be almost fully transparent
+    const frameEnd = frames[totalFrames - 1];
+    const frameEndAlpha = frameEnd.data[3];
+    expect(frameEndAlpha).toBeLessThan(50);
 
     foregroundLayer.delete();
     backgroundLayer.delete();
