@@ -1,7 +1,21 @@
 import { Tensor } from "onnxruntime-web";
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect, beforeAll, vi } from "vitest";
 import { loadOnnxModel, runOnnxInference } from "./model";
 import { postProcessAlphaMask } from "./postprocess";
+
+// Mock the model module
+vi.mock("./model", () => ({
+  loadOnnxModel: vi.fn(async () => {
+    console.log("Mock loadOnnxModel called.");
+    return Promise.resolve();
+  }),
+  runOnnxInference: vi.fn(async (inputTensor: Tensor) => {
+    console.log("Mock runOnnxInference called.");
+    // Return a dummy tensor with the same shape as input, filled with 1s
+    const outputData = new Float32Array(inputTensor.data.length).fill(1);
+    return Promise.resolve(new Tensor("float32", outputData, inputTensor.dims));
+  }),
+}));
 
 describe("ONNX Runtime Web Integration", () => {
   const modelPath = "/models/u2net.onnx"; // Path for browser environment

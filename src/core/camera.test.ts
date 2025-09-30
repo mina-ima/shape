@@ -4,16 +4,16 @@ import { camera } from "@/camera";
 describe("Camera module", () => {
   it("should not have getMediaStream function yet", () => {
     // @ts-expect-error: getMediaStream does not exist yet
-    expect(camera.getMediaStream).toBeDefined();
+    expect(camera.getMediaStream).toBeUndefined();
   });
 
   it("should not have selectImageFile function yet", () => {
     // @ts-expect-error: selectImageFile does not exist yet
-    expect(camera.selectImageFile).toBeDefined();
+    expect(camera.selectImageFile).toBeUndefined();
   });
 
   it("should not have processImage function yet", () => {
     // @ts-expect-error: processImage does not exist yet
-    expect(camera.processImage).toBeDefined();
+    expect(camera.processImage).toBeUndefined();
   });
 });

@@ -10,6 +10,7 @@ export async function loadOnnxModel(modelPath: string): Promise<void> {
     // Explicitly set the path to the WASM backend files.
     // Vite serves the `public` directory at the root.
     env.wasm.wasmPaths = "/";
+    env.wasm.numThreads = 1; // Disable threading for potentially better compatibility in test environment
 
     session = await InferenceSession.create(modelPath, {
       executionProviders: ["wasm"], // Explicitly use wasm backend
