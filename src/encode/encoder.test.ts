@@ -23,7 +23,7 @@ vi.mock("./ffmpeg", () => ({
   encodeWithFFmpeg: mockEncodeWithFFmpeg,
 }));
 
-import { encodeVideo } from "./encoder";
+import { encodeVideo, getPreferredMimeType } from "./encoder";
 
 describe("Video Encoder Fallback Logic", () => {
   beforeEach(() => {
@@ -87,6 +87,26 @@ describe("Video Encoder Fallback Logic", () => {
       "All video encoders failed.",
     );
 
+    vi.unstubAllGlobals();
+  });
+});
+
+describe("getPreferredMimeType", () => {
+  it("should return 'video/webm' for non-iOS user agents", () => {
+    vi.stubGlobal("navigator", {
+      userAgent:
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36",
+    });
+    expect(getPreferredMimeType()).toBe("video/webm");
+    vi.unstubAllGlobals();
+  });
+
+  it("should return 'video/mp4' for iOS user agents", () => {
+    vi.stubGlobal("navigator", {
+      userAgent:
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 16_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.1 Mobile/15E148 Safari/604.1",
+    });
+    expect(getPreferredMimeType()).toBe("video/mp4");
     vi.unstubAllGlobals();
   });
 });

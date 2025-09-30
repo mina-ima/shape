@@ -89,7 +89,7 @@
 
 ## 7. 動画エンコード & 保存
 
-- [ ] 優先順実装：①WebCodecs → ②MediaRecorder → ③ffmpeg.wasm。
+- [x] 優先順実装：①WebCodecs → ②MediaRecorder → ③ffmpeg.wasm。
   - **Verify**: feature detectで自動切替、各パスが動画生成可能。
 - [ ] 出力形式：iOSは MP4 優先、他は WebM 優先。
   - **Verify**: 実機で再生可否を確認（Safari/Chrome）。
