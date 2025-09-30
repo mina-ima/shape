@@ -79,8 +79,9 @@
 
 - [x] レイヤー生成：`FG=image*mask`, `BG=bestCandidate`。
   - **Verify**: 透明漏れがない。
-- [ ] BG 拡張塗り（拡大→ぼかし）で隙間を埋める。
+- [x] BG 拡張塗り（拡大→ぼかし）で隙間を埋める。
   - **Verify**: パン時の端が目立たない。
+- **コンポーネント:** `Tabs.tsx`を新規作成（`role="tablist"`等のアクセシビリティ対応）。 [DONE]
 - [ ] アニメ：5s（端末で 3–5s 自動調整）、`easeInOutSine`。
   - **Verify**: FG/ BG の逆方向パン、`scale` 差で視差が出る。
 - [ ] ループ用クロスフェード 0.3s（MVPは任意）。

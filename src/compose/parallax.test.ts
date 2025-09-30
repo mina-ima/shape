@@ -1,16 +1,16 @@
 import { describe, it, expect, beforeAll } from "vitest";
-import cv from "@techstark/opencv-js";
-import { generateLayers } from "./parallax";
+import cvPromise from "@techstark/opencv-js";
+import { generateLayers, generateParallaxFrames } from "./parallax";
 
-let cvInstance: typeof cv;
+let cv: typeof import("@techstark/opencv-js");
 
 describe("Layer Generation", () => {
   beforeAll(async () => {
+    cv = await cvPromise;
     await cv.onRuntimeInitialized;
-    cvInstance = cv;
   });
 
-  it("should generate foreground and background layers with correct transparency", () => {
+  it("should generate foreground and background layers with correct transparency", async () => {
     const width = 10;
     const height = 10;
 
@@ -22,11 +22,8 @@ describe("Layer Generation", () => {
       originalImageData[i + 2] = 0;
       originalImageData[i + 3] = 255; // Opaque
     }
-    const originalImage = cvInstance.matFromImageData({
-      width: width,
-      height: height,
-      data: originalImageData,
-    });
+    const originalImage = new cv.Mat(height, width, cv.CV_8UC4);
+    originalImage.data.set(originalImageData);
 
     // Dummy alpha mask (grayscale, 0-255)
     const alphaMaskData = new Uint8Array(width * height);
@@ -35,7 +32,7 @@ describe("Layer Generation", () => {
         alphaMaskData[y * width + x] = x < width / 2 ? 0 : 255; // Left half transparent, right half opaque
       }
     }
-    const alphaMask = new cvInstance.Mat(height, width, cvInstance.CV_8UC1);
+    const alphaMask = new cv.Mat(height, width, cv.CV_8UC1);
     alphaMask.data.set(alphaMaskData);
 
     // Dummy background image (RGB)
@@ -45,14 +42,11 @@ describe("Layer Generation", () => {
       bgImageData[i + 1] = 255; // Green
       bgImageData[i + 2] = 0;
     }
-    const backgroundImage = cvInstance.matFromImageData({
-      width: width,
-      height: height,
-      data: bgImageData,
-    });
+    const backgroundImage = new cv.Mat(height, width, cv.CV_8UC3);
+    backgroundImage.data.set(bgImageData);
 
-    const { foreground, background } = generateLayers(
-      cvInstance,
+    const { foreground, background } = await generateLayers(
+      cv,
       originalImage,
       alphaMask,
       backgroundImage,
@@ -74,5 +68,61 @@ describe("Layer Generation", () => {
     backgroundImage.delete();
     foreground.delete();
     background.delete();
+  });
+});
+
+describe("Parallax Animation", () => {
+  beforeAll(async () => {
+    cv = await cvPromise;
+    await cv.onRuntimeInitialized;
+  });
+
+  it("should generate parallax animation frames", async () => {
+    const width = 100;
+    const height = 100;
+    const duration = 5; // seconds
+    const fps = 30;
+    const totalFrames = duration * fps;
+
+    // Dummy foreground and background layers (RGBA and RGB respectively)
+    const fgData = new Uint8Array(width * height * 4).fill(255);
+    const bgData = new Uint8Array(width * height * 3).fill(128);
+
+    const foregroundLayer = new cv.Mat(height, width, cv.CV_8UC4);
+    foregroundLayer.data.set(fgData);
+    const backgroundLayer = new cv.Mat(height, width, cv.CV_8UC3);
+    backgroundLayer.data.set(bgData);
+
+    const frames = await generateParallaxFrames(
+      cv,
+      foregroundLayer,
+      backgroundLayer,
+      width,
+      height,
+      duration,
+      fps
+    );
+
+    expect(frames).toBeDefined();
+    expect(frames.length).toBe(totalFrames);
+
+    // Check transformations for a few frames
+    // Frame 0 (start)
+    const frame0 = frames[0];
+    // Expect no pan/scale at the beginning for simplicity in this test
+    // A more robust test would check actual pixel data after transformation
+    expect(frame0).toBeDefined();
+
+    // Frame at half duration (mid-point)
+    const frameMid = frames[Math.floor(totalFrames / 2)];
+    expect(frameMid).toBeDefined();
+
+    // Frame at end
+    const frameEnd = frames[totalFrames - 1];
+    expect(frameEnd).toBeDefined();
+
+    foregroundLayer.delete();
+    backgroundLayer.delete();
+    frames.forEach((f) => f.delete());
   });
 });
