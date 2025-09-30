@@ -1,17 +1,16 @@
-
-import { describe, it, expect, beforeAll } from 'vitest';
-import cv from '@techstark/opencv-js';
-import { generateLayers } from './parallax';
+import { describe, it, expect, beforeAll } from "vitest";
+import cv from "@techstark/opencv-js";
+import { generateLayers } from "./parallax";
 
 let cvInstance: typeof cv;
 
-describe('Layer Generation', () => {
+describe("Layer Generation", () => {
   beforeAll(async () => {
     await cv.onRuntimeInitialized;
     cvInstance = cv;
   });
 
-  it('should generate foreground and background layers with correct transparency', () => {
+  it("should generate foreground and background layers with correct transparency", () => {
     const width = 10;
     const height = 10;
 
@@ -56,7 +55,7 @@ describe('Layer Generation', () => {
       cvInstance,
       originalImage,
       alphaMask,
-      backgroundImage
+      backgroundImage,
     );
 
     expect(foreground).toBeDefined();
