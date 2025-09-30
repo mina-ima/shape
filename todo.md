@@ -81,7 +81,7 @@
   - **Verify**: 透明漏れがない。
 - [x] BG 拡張塗り（拡大→ぼかし）で隙間を埋める。
   - **Verify**: パン時の端が目立たない。
-- **コンポーネント:** `Tabs.tsx`を新規作成（`role="tablist"`等のアクセシビリティ対応）。 [DONE]
+- **コンポーネント:** `Tabs.tsx`を新規作成（`role="tablist"`等のアクセシビリティ対応）。 [DONE] [DONE]
 - [x] アニメ：5s（端末で 3–5s 自動調整）、`easeInOutSine`。
   - **Verify**: FG/ BG の逆方向パン、`scale` 差で視差が出る。
 - [x] ループ用クロスフェード 0.3s（MVPは任意）。
@@ -91,22 +91,22 @@
 
 - [x] 優先順実装：①WebCodecs → ②MediaRecorder → ③ffmpeg.wasm。
   - **Verify**: feature detectで自動切替、各パスが動画生成可能。
-- [ ] 出力形式：iOSは MP4 優先、他は WebM 優先。
+- [x] 出力形式：iOSは MP4 優先、他は WebM 優先。
   - **Verify**: 実機で再生可否を確認（Safari/Chrome）。
-- [ ] ファイル名：`parallax_YYYYMMDD_HHMMSS.webm|mp4`。
+- [x] ファイル名：`parallax_YYYYMMDD_HHMMSS.webm|mp4`。
   - **Verify**: タイムゾーンに依存しないISO生成。
-- [ ] 保存：`showSaveFilePicker` → iOS は `a[download]` フォールバック。
+- [x] 保存：`showSaveFilePicker` → iOS は `a[download]` フォールバック。
   - **Verify**: 実機でアルバム保存 or ファイル保存が成功。
 
 ## 8. UI/UX（ミニマル）
 
-- [ ] 1画面目：中央に「撮影/選択」ボタン（1タップ完結）。
+- [x] 1画面目：中央に「撮影/選択」ボタン（1タップ完結）。
   - **Verify**: 余計な選択肢なし。
-- [ ] ローディング：雲が集まるアニメ（Canvas/Lottie）。`prefers-reduced-motion` 対応。
+- [x] ローディング：雲が集まるアニメ（Canvas/Lottie）。`prefers-reduced-motion` 対応。
   - **Verify**: 低モーション環境で静的代替表示。
-- [ ] プレビュー：自動再生 + 「保存」ボタンのみ。
+- [x] プレビュー：自動再生 + 「保存」ボタンのみ。
   - **Verify**: 意図しないタップ領域がない（ヒットボックス >= 44px）。
-- [ ] 成功トースト + 素材の attribution 表示。
+- [x] 成功トースト + 素材の attribution 表示。
   - **Verify**: 表示義務を満たしつつ主張しすぎない。
 
 ## 9. エラー処理 / リトライ
