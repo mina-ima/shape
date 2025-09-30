@@ -80,6 +80,9 @@ export default defineConfig({
       },
     }),
   ],
+  optimizeDeps: {
+    include: ["onnxruntime-web"],
+  },
   test: {
     globals: true,
     setupFiles: "./src/test/setup.ts",

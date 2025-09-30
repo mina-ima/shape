@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState } from "react";
 
 interface TabPanelProps {
   label: string;
@@ -14,24 +14,29 @@ interface TabsProps {
   defaultActiveTab?: number;
 }
 
-export const Tabs: React.FC<TabsProps> = ({ children, defaultActiveTab = 0 }) => {
+export const Tabs: React.FC<TabsProps> = ({
+  children,
+  defaultActiveTab = 0,
+}) => {
   const [activeTab, setActiveTab] = useState(defaultActiveTab);
 
-  const handleKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
-    const tabs = React.Children.toArray(children) as React.ReactElement<TabPanelProps>[];
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
+    const tabs = React.Children.toArray(
+      children,
+    ) as React.ReactElement<TabPanelProps>[];
     let newIndex = activeTab;
 
     switch (event.key) {
-      case 'ArrowRight':
+      case "ArrowRight":
         newIndex = (activeTab + 1) % tabs.length;
         break;
-      case 'ArrowLeft':
+      case "ArrowLeft":
         newIndex = (activeTab - 1 + tabs.length) % tabs.length;
         break;
-      case 'Home':
+      case "Home":
         newIndex = 0;
         break;
-      case 'End':
+      case "End":
         newIndex = tabs.length - 1;
         break;
       default:
@@ -54,7 +59,7 @@ export const Tabs: React.FC<TabsProps> = ({ children, defaultActiveTab = 0 }) =>
           id={`tab-${index}`}
           tabIndex={index === activeTab ? 0 : -1}
           onClick={() => setActiveTab(index)}
-          onKeyDown={(e) => handleKeyDown(e, index)}
+          onKeyDown={(e) => handleKeyDown(e)}
         >
           {child.props.label}
         </button>
