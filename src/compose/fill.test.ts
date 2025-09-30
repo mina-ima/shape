@@ -1,13 +1,13 @@
 import { describe, it, expect, beforeAll } from "vitest";
-import cv from "@techstark/opencv-js";
+import cvPromise from "@techstark/opencv-js";
 import { expandAndBlurBackground } from "./fill";
 
-let cvInstance: typeof cv;
+let cv: typeof import("@techstark/opencv-js");
 
 describe("Background Expansion and Blurring", () => {
   beforeAll(async () => {
+    cv = await cvPromise;
     await cv.onRuntimeInitialized;
-    cvInstance = cv;
   });
 
   it("should expand and blur the background image", () => {
@@ -21,13 +21,10 @@ describe("Background Expansion and Blurring", () => {
       bgImageData[i + 1] = 150; // Green
       bgImageData[i + 2] = 200; // Blue
     }
-    const originalBg = cvInstance.matFromImageData({
-      width: width,
-      height: height,
-      data: bgImageData,
-    });
+    const originalBg = new cv.Mat(height, width, cv.CV_8UC3);
+    originalBg.data.set(bgImageData);
 
-    const expandedBg = expandAndBlurBackground(cvInstance, originalBg, 1.2, 15); // Expand by 20%, blur with 15px kernel
+    const expandedBg = expandAndBlurBackground(cv, originalBg, 1.2, 15); // Expand by 20%, blur with 15px kernel
 
     // Expect the expanded background to be larger
     expect(expandedBg.cols).toBeGreaterThan(width);

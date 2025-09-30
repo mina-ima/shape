@@ -83,7 +83,7 @@ export default defineConfig({
   test: {
     globals: true,
     setupFiles: "./src/test/setup.ts",
-    include: ["src/**/*.test.{ts,tsx}"],
+    include: ["src/**/*.test.{ts,tsx}", "src/ui/Tabs.test.tsx"],
     browser: {
       enabled: true,
       name: "chromium",
