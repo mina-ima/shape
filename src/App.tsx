@@ -1,8 +1,15 @@
 function App() {
   return (
-    <>
-      <h1>Vite + React</h1>
-    </>
+    <div
+      style={{
+        display: "flex",
+        justifyContent: "center",
+        alignItems: "center",
+        minHeight: "100vh",
+      }}
+    >
+      <button>撮影/選択</button>
+    </div>
   );
 }
 
