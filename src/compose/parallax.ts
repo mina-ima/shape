@@ -243,7 +243,9 @@ export function animateParallax(
     }
     const elapsedTime = currentTime - startTime;
 
-    const progress = (elapsedTime % durationMs) / durationMs;
+    const loopTime = elapsedTime % durationMs;
+    const progress =
+      elapsedTime > 0 && loopTime === 0 ? 1 : loopTime / durationMs;
     const easedProgress = easeInOutSine(progress);
 
     // Foreground animation: pan right to left, smaller scale
@@ -258,12 +260,11 @@ export function animateParallax(
     if (crossfadeDurationSeconds > 0) {
       if (progress > (durationMs - crossfadeDurationMs) / durationMs) {
         const fadeProgress =
-          (elapsedTime - (durationMs - crossfadeDurationMs)) /
-          crossfadeDurationMs;
+          (loopTime - (durationMs - crossfadeDurationMs)) / crossfadeDurationMs;
         foregroundElement.style.opacity = `${1 - fadeProgress}`;
         backgroundElement.style.opacity = `${1 - fadeProgress}`;
       } else if (progress < crossfadeDurationMs / durationMs) {
-        const fadeProgress = elapsedTime / crossfadeDurationMs;
+        const fadeProgress = loopTime / crossfadeDurationMs;
         foregroundElement.style.opacity = `${fadeProgress}`;
         backgroundElement.style.opacity = `${fadeProgress}`;
       } else {
