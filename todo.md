@@ -77,7 +77,7 @@
 
 ## 6. 合成 & 2.5D パララックス
 
-- [ ] レイヤー生成：`FG=image*mask`, `BG=bestCandidate`。
+- [x] レイヤー生成：`FG=image*mask`, `BG=bestCandidate`。
   - **Verify**: 透明漏れがない。
 - [ ] BG 拡張塗り（拡大→ぼかし）で隙間を埋める。
   - **Verify**: パン時の端が目立たない。
