@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from "react";
-import { saveFile, generateFilename } from "../storage/save";
+import { saveFile, MimeType } from "../storage/save";
 
 interface PreviewScreenProps {
   videoBlob: Blob;
@@ -26,10 +26,8 @@ const PreviewScreen: React.FC<PreviewScreenProps> = ({ videoBlob }) => {
   }, [videoBlob]);
 
   const handleSave = async () => {
-    const filename = generateFilename(
-      videoBlob.type as "video/webm" | "video/mp4",
-    );
-    await saveFile(videoBlob, filename);
+    const mimeType = videoBlob.type as MimeType;
+    await saveFile(videoBlob, mimeType);
   };
 
   return (

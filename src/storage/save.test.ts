@@ -1,4 +1,5 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import type { Mock } from "vitest";
 import { generateFilename, saveFile } from "./save";
 
 describe("generateFilename", () => {
@@ -23,20 +24,30 @@ describe("generateFilename", () => {
 });
 
 describe("saveFile", () => {
-  it("should use showSaveFilePicker if available", async () => {
-    const mockWritable = {
-      write: vi.fn(),
-      close: vi.fn(),
-    };
-    const mockFileHandle = {
-      createWritable: vi.fn().mockResolvedValue(mockWritable),
-    };
+  // Mock file handle and writable stream
+  const mockWritable = {
+    write: vi.fn(),
+    close: vi.fn(),
+  };
+  const mockFileHandle = {
+    createWritable: vi.fn().mockResolvedValue(mockWritable),
+  };
+
+  beforeEach(() => {
+    // Reset mocks before each test
+    vi.clearAllMocks();
+    // Mock the global showSaveFilePicker
     window.showSaveFilePicker = vi.fn().mockResolvedValue(mockFileHandle);
+  });
 
-    const blob = new Blob(["test"], { type: "text/plain" });
-    await saveFile(blob, "test.txt");
+  it("should use showSaveFilePicker if available", async () => {
+    const blob = new Blob(["test"], { type: "video/webm" });
+    await saveFile(blob, "video/webm");
 
-    expect(window.showSaveFilePicker).toHaveBeenCalled();
+    expect(window.showSaveFilePicker).toHaveBeenCalledOnce();
+    expect(window.showSaveFilePicker).toHaveBeenCalledWith({
+      suggestedName: expect.stringContaining(".webm"),
+    });
     expect(mockFileHandle.createWritable).toHaveBeenCalled();
     expect(mockWritable.write).toHaveBeenCalledWith(blob);
     expect(mockWritable.close).toHaveBeenCalled();
@@ -55,12 +66,67 @@ describe("saveFile", () => {
     document.body.appendChild = vi.fn();
     document.body.removeChild = vi.fn();
 
-    const blob = new Blob(["test"], { type: "text/plain" });
-    await saveFile(blob, "test.txt");
+    const blob = new Blob(["test"], { type: "video/webm" });
+    await saveFile(blob, "video/webm");
 
     expect(document.createElement).toHaveBeenCalledWith("a");
     expect(mockLink.href).toBe("blob:url");
-    expect(mockLink.download).toBe("test.txt");
+    expect(mockLink.download).toContain(".webm");
     expect(mockLink.click).toHaveBeenCalled();
+  });
+
+  it("should retry with alternative MIME type if saving with preferred one fails", async () => {
+    // Make the first call fail, second succeed
+    (window.showSaveFilePicker as Mock)
+      .mockRejectedValueOnce(new DOMException("Save failed", "AbortError"))
+      .mockResolvedValueOnce(mockFileHandle);
+
+    const blob = new Blob(["test"], { type: "video/webm" });
+    await saveFile(blob, "video/webm");
+
+    // Check that it was called twice
+    expect(window.showSaveFilePicker).toHaveBeenCalledTimes(2);
+
+    // Check first call with preferred type (.webm)
+    expect(window.showSaveFilePicker).toHaveBeenCalledWith({
+      suggestedName: expect.stringContaining(".webm"),
+    });
+
+    // Check second call with alternative type (.mp4)
+    expect(window.showSaveFilePicker).toHaveBeenCalledWith({
+      suggestedName: expect.stringContaining(".mp4"),
+    });
+
+    // Check that the file was written on the second attempt
+    expect(mockWritable.write).toHaveBeenCalledWith(blob);
+    expect(mockWritable.close).toHaveBeenCalled();
+  });
+
+  it("should fall back to <a> download if both MIME types fail", async () => {
+    // Make both calls to showSaveFilePicker fail
+    (window.showSaveFilePicker as Mock).mockRejectedValue(
+      new DOMException("Save failed", "AbortError"),
+    );
+
+    const mockLink = {
+      href: "",
+      download: "",
+      click: vi.fn(),
+    };
+    window.URL.createObjectURL = vi.fn().mockReturnValue("blob:url");
+    document.createElement = vi.fn().mockReturnValue(mockLink);
+    document.body.appendChild = vi.fn();
+
+    const blob = new Blob(["test"], { type: "video/webm" });
+    await saveFile(blob, "video/webm");
+
+    // showSaveFilePicker was called twice
+    expect(window.showSaveFilePicker).toHaveBeenCalledTimes(2);
+
+    // Fallback to <a> download was triggered
+    expect(document.createElement).toHaveBeenCalledWith("a");
+    expect(mockLink.click).toHaveBeenCalled();
+    // It should try to download with the original preferred filename
+    expect(mockLink.download).toContain(".webm");
   });
 });
