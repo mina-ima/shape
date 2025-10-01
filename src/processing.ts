@@ -1,7 +1,8 @@
 import { loadOnnxModel, runOnnxInference } from "./segmentation/model";
 import { Tensor } from "onnxruntime-web";
+import { getBackgroundImage } from "./search/search";
 
-export const runProcessing = async (): Promise<void> => {
+export const runProcessing = async (unsplashApiKey: string): Promise<void> => {
   // Ensure the ONNX model is loaded before inference
   await loadOnnxModel("/public/models/u2net.onnx");
 
@@ -14,7 +15,12 @@ export const runProcessing = async (): Promise<void> => {
   // Run ONNX inference
   await runOnnxInference(inputTensor);
 
-  // Simulate other processing steps (similarity, composition, encoding)
+  // Simulate background image search using the provided API key
+  console.log("Searching for background images...");
+  const query = "cloud"; // Example query
+  await getBackgroundImage(query, unsplashApiKey);
+
+  // Simulate other processing steps (composition, encoding)
   console.log("Running actual processing steps...");
   await new Promise((resolve) => setTimeout(resolve, 100)); // Simulate async work
 };

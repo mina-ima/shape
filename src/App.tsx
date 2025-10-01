@@ -11,16 +11,37 @@ function App() {
     error,
     resolution,
     retryCount,
+    unsplashApiKey,
     startProcessing,
     setSuccess,
     setError,
     handleProcessingError,
     incrementRetryCount,
     logErrorToLocalStorage,
+    setUnsplashApiKey,
     reset,
   } = useStore();
 
+  // Effect to read API key from URL fragment on initial load
+  useEffect(() => {
+    const fragment = window.location.hash;
+    const params = new URLSearchParams(fragment.substring(1)); // Remove #
+    const apiKey = params.get("unsplash_api_key");
+
+    if (apiKey) {
+      setUnsplashApiKey(apiKey);
+      // Optionally, clean the URL fragment after reading
+      // window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    }
+  }, [setUnsplashApiKey]);
+
   const handleInitialStart = () => {
+    if (!unsplashApiKey) {
+      setError(
+        "Unsplash API Key is missing. Please provide it in the URL fragment (e.g., #unsplash_api_key=YOUR_KEY) or via settings.",
+      );
+      return;
+    }
     startProcessing();
     incrementRetryCount(); // Initial attempt counts as 1
   };
@@ -28,7 +49,7 @@ function App() {
   useEffect(() => {
     // This effect orchestrates the processing attempts and retries.
     const process = async () => {
-      if (retryCount > useStore.getState().MAX_RETRIES) {
+      if (retryCount > MAX_RETRIES) {
         // Check against MAX_RETRIES from store
         setError("Maximum retry attempts reached.");
         logErrorToLocalStorage("Maximum retry attempts reached.");
@@ -48,7 +69,13 @@ function App() {
 
       try {
         console.log(`Processing with resolution: ${resolution}`);
-        await runProcessing();
+        // Pass the API key to runProcessing
+        if (!unsplashApiKey) {
+          setError("Unsplash API Key is missing.");
+          logErrorToLocalStorage("Unsplash API Key is missing.");
+          return;
+        }
+        await runProcessing(unsplashApiKey);
         // If processing succeeds, update the state to 'success'.
         setSuccess();
       } catch (e) {
@@ -61,10 +88,8 @@ function App() {
       }
     };
 
-    // Only run the process if the status is 'processing'.
-    // The state changes within handleProcessingError will trigger this effect again
-    // with a new resolution, creating the retry loop.
-    if (status === "processing") {
+    // Only run the process if the status is 'processing' and API key is available.
+    if (status === "processing" && unsplashApiKey) {
       process();
     }
     // The dependencies are crucial. The effect re-runs if the status or resolution changes.
@@ -72,6 +97,7 @@ function App() {
     status,
     resolution,
     retryCount,
+    unsplashApiKey,
     startProcessing,
     setSuccess,
     setError,
@@ -83,7 +109,19 @@ function App() {
   const renderContent = () => {
     switch (status) {
       case "idle":
-        return <button onClick={handleInitialStart}>撮影/選択</button>;
+        return (
+          <div>
+            {!unsplashApiKey && (
+              <p style={{ color: "red" }}>
+                Unsplash API Key is missing. Please provide it in the URL
+                fragment (e.g., #unsplash_api_key=YOUR_KEY) or via settings.
+              </p>
+            )}
+            <button onClick={handleInitialStart} disabled={!unsplashApiKey}>
+              撮影/選択
+            </button>
+          </div>
+        );
       case "processing":
         return (
           <div>
