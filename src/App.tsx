@@ -9,7 +9,7 @@ function App() {
   const {
     status,
     error,
-    resolution,
+    processingResolution,
     retryCount,
     unsplashApiKey,
     startProcessing,
@@ -58,7 +58,7 @@ function App() {
 
       const delay = INITIAL_BACKOFF_DELAY * Math.pow(2, retryCount - 1); // Exponential backoff
       console.log(
-        `Attempt ${retryCount} with resolution ${resolution}. Next retry in ${delay / 1000}s.`,
+        `Attempt ${retryCount} with resolution ${processingResolution}. Next retry in ${delay / 1000}s.`,
       );
 
       // Introduce exponential backoff delay before the actual processing attempt
@@ -68,7 +68,7 @@ function App() {
       }
 
       try {
-        console.log(`Processing with resolution: ${resolution}`);
+        console.log(`Processing with resolution: ${processingResolution}`);
         // Pass the API key to runProcessing
         if (!unsplashApiKey) {
           setError("Unsplash API Key is missing.");
@@ -95,7 +95,7 @@ function App() {
     // The dependencies are crucial. The effect re-runs if the status or resolution changes.
   }, [
     status,
-    resolution,
+    processingResolution,
     retryCount,
     unsplashApiKey,
     startProcessing,
@@ -126,7 +126,7 @@ function App() {
         return (
           <div>
             <LoadingCloud />
-            <p>処理中... (解像度: {resolution})</p>
+            <p>処理中... (解像度: {processingResolution})</p>
             {retryCount > 0 && retryCount <= MAX_RETRIES && (
               <p>
                 再試行回数: {retryCount}/{MAX_RETRIES}
