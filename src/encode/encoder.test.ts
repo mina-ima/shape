@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Use vi.hoisted to define mocks that are used inside vi.mock factories
 const {
@@ -88,6 +88,158 @@ describe("Video Encoder Fallback Logic", () => {
     );
 
     vi.unstubAllGlobals();
+  });
+
+  it("should retry with alternative MIME type if WebCodeacs fails with preferred MIME type", async () => {
+    vi.spyOn(window, "navigator", "get").mockReturnValue({
+      userAgent: "non-iOS",
+    } as Partial<Navigator> as Navigator);
+    const preferredMimeType = getPreferredMimeType(); // Should be webm
+    const alternativeMimeType =
+      preferredMimeType === "video/webm" ? "video/mp4" : "video/webm";
+
+    // First call with preferredMimeType fails, second with alternativeMimeType succeeds
+    mockEncodeWithWebCodecs
+      .mockRejectedValueOnce(new Error("WebCodecs failed with preferred"))
+      .mockResolvedValueOnce(new Blob());
+    vi.stubGlobal("VideoEncoder", () => {});
+
+    await encodeVideo([], 30);
+
+    expect(mockEncodeWithWebCodecs).toHaveBeenCalledTimes(2);
+    expect(mockEncodeWithWebCodecs).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.any(Number),
+      preferredMimeType,
+    );
+    expect(mockEncodeWithWebCodecs).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.any(Number),
+      alternativeMimeType,
+    );
+    expect(mockEncodeWithMediaRecorder).not.toHaveBeenCalled();
+    expect(mockEncodeWithFFmpeg).not.toHaveBeenCalled();
+
+    vi.unstubAllGlobals();
+  });
+
+  it("should retry with alternative MIME type if MediaRecorder fails with preferred MIME type", async () => {
+    // Mock getPreferredMimeType to return webm
+    vi.spyOn(window, "navigator", "get").mockReturnValue({
+      userAgent: "non-iOS",
+    } as Partial<Navigator> as Navigator);
+    const preferredMimeType = getPreferredMimeType(); // Should be webm
+    const alternativeMimeType =
+      preferredMimeType === "video/webm" ? "video/mp4" : "video/webm";
+
+    // WebCodecs is unavailable, MediaRecorder first call with preferredMimeType fails, second with alternativeMimeType succeeds
+    vi.stubGlobal("VideoEncoder", undefined);
+    vi.stubGlobal("MediaRecorder", () => {});
+    mockEncodeWithMediaRecorder
+      .mockRejectedValueOnce(new Error("MediaRecorder failed with preferred"))
+      .mockResolvedValueOnce(new Blob());
+
+    await encodeVideo([], 30);
+
+    expect(mockEncodeWithWebCodecs).not.toHaveBeenCalled();
+    expect(mockEncodeWithMediaRecorder).toHaveBeenCalledTimes(2);
+    expect(mockEncodeWithMediaRecorder).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.any(Number),
+      preferredMimeType,
+    );
+    expect(mockEncodeWithMediaRecorder).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.any(Number),
+      alternativeMimeType,
+    );
+    expect(mockEncodeWithFFmpeg).not.toHaveBeenCalled();
+
+    vi.unstubAllGlobals();
+  });
+
+  it("should retry with alternative MIME type if ffmpeg.wasm fails with preferred MIME type", async () => {
+    // Mock getPreferredMimeType to return webm
+    vi.spyOn(window, "navigator", "get").mockReturnValue({
+      userAgent: "non-iOS",
+    } as Partial<Navigator> as Navigator);
+    const preferredMimeType = getPreferredMimeType(); // Should be webm
+    const alternativeMimeType =
+      preferredMimeType === "video/webm" ? "video/mp4" : "video/webm";
+
+    // All other encoders are unavailable, ffmpeg.wasm first call with preferredMimeType fails, second with alternativeMimeType succeeds
+    vi.stubGlobal("VideoEncoder", undefined);
+    vi.stubGlobal("MediaRecorder", undefined);
+    mockEncodeWithFFmpeg
+      .mockRejectedValueOnce(new Error("FFmpeg failed with preferred"))
+      .mockResolvedValueOnce(new Blob());
+
+    await encodeVideo([], 30);
+
+    expect(mockEncodeWithWebCodecs).not.toHaveBeenCalled();
+    expect(mockEncodeWithMediaRecorder).not.toHaveBeenCalled();
+    expect(mockEncodeWithFFmpeg).toHaveBeenCalledTimes(2);
+    expect(mockEncodeWithFFmpeg).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.any(Number),
+      preferredMimeType,
+    );
+    expect(mockEncodeWithFFmpeg).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.any(Number),
+      alternativeMimeType,
+    );
+
+    vi.unstubAllGlobals();
+  });
+});
+
+describe("Video Encoding Performance", () => {
+  const mockFrames = Array(5 * 30).fill(new cv.Mat()); // 5 seconds of 30fps frames
+  const fps = 30;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubGlobal("VideoEncoder", () => {}); // Ensure WebCodecs is available for these tests
+    vi.stubGlobal("MediaRecorder", undefined); // Ensure MediaRecorder is not used
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("should encode 5s@720p with WebCodecs in less than 2s", async () => {
+    // Simulate WebCodecs encoding taking 1.5 seconds
+    mockEncodeWithWebCodecs.mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      return new Blob();
+    });
+
+    const startTime = performance.now();
+    await encodeVideo(mockFrames, fps);
+    const endTime = performance.now();
+    const duration = endTime - startTime;
+
+    console.log(`WebCodecs encoding duration: ${duration.toFixed(2)} ms`);
+    expect(duration).toBeLessThan(2000); // 2 seconds
+  });
+
+  it("should encode 5s@720p with ffmpeg.wasm in less than 15s", async () => {
+    // Simulate ffmpeg.wasm encoding taking 10 seconds
+    mockEncodeWithWebCodecs.mockRejectedValue(new Error("WebCodecs failed")); // Force fallback
+    vi.stubGlobal("VideoEncoder", undefined);
+    mockEncodeWithFFmpeg.mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10000));
+      return new Blob();
+    });
+
+    const startTime = performance.now();
+    await encodeVideo(mockFrames, fps);
+    const endTime = performance.now();
+    const duration = endTime - startTime;
+
+    console.log(`ffmpeg.wasm encoding duration: ${duration.toFixed(2)} ms`);
+    expect(duration).toBeLessThan(15000); // 15 seconds
   });
 });
 
