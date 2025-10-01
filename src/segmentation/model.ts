@@ -1,6 +1,7 @@
 import { InferenceSession, Tensor, env } from "onnxruntime-web";
 import { generateLowPrecisionMask } from "./lowPrecision";
-import { useStore, ProcessingResolution } from "@/core/store"; // Corrected import path
+import { AppState } from '@/core/store';
+import { ProcessingResolution } from '@/core/types';
 
 let session: InferenceSession | null = null;
 let lowPrecisionMode = false;
@@ -46,7 +47,7 @@ function getOnnxInputDimensions(
 }
 
 export async function runOnnxInference(inputTensor: Tensor): Promise<Tensor> {
-  const { resolution, setResolution } = useStore.getState(); // Corrected state access
+  const { setProcessingResolution } = getStore.getState();
   const [targetWidth, targetHeight] = getOnnxInputDimensions(resolution);
 
   // Simulate memory/timeout error for testing purposes - DISABLED for performance testing
