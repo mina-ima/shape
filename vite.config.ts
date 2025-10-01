@@ -11,6 +11,7 @@ export default defineConfig({
     VitePWA({
       injectManifest: {
         injectionPoint: undefined,
+        sri: true, // Enable SRI for injected manifest
       },
       swSrc: "src/sw.ts",
       workbox: {
@@ -82,6 +83,10 @@ export default defineConfig({
   ],
   optimizeDeps: {
     include: ["onnxruntime-web"],
+  },
+  server: {
+    // Enable HTTPS for development server
+    https: true,
   },
   test: {
     globals: true,
