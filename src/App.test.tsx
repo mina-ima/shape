@@ -16,6 +16,7 @@ describe("App", () => {
   let localStorageSetItemSpy: vi.SpyInstance;
   let consoleLogSpy: vi.SpyInstance;
   let loadOnnxModelSpy: vi.SpyInstance;
+  let windowLocationHashSpy: vi.SpyInstance;
 
   beforeEach(() => {
     // Reset store and mocks before each test
@@ -36,6 +37,9 @@ describe("App", () => {
 
     // Spy on loadOnnxModel
     loadOnnxModelSpy = vi.spyOn(modelModule, "loadOnnxModel");
+
+    // Mock window.location.hash
+    windowLocationHashSpy = vi.spyOn(window.location, "hash", "get");
   });
 
   afterEach(() => {
@@ -43,6 +47,7 @@ describe("App", () => {
     localStorageSetItemSpy.mockRestore();
     consoleLogSpy.mockRestore();
     loadOnnxModelSpy.mockRestore();
+    windowLocationHashSpy.mockRestore();
   });
 
   it("should render the initial button", () => {
@@ -89,7 +94,7 @@ describe("App", () => {
     await act(async () => {
       vi.advanceTimersByTime(1000); // Advance by 1 second
     });
-    await screen.findByText("処理中... (解解像度: 540)");
+    await screen.findByText("処理中... (解像度: 540)");
     expect(runProcessing).toHaveBeenCalledTimes(2);
     expect(consoleLogSpy).toHaveBeenCalledWith(
       `Attempt 2 with resolution 540. Next retry in 1s.`,
@@ -149,5 +154,40 @@ describe("App", () => {
     expect(useStore.getState().status).toBe("success");
     expect(runProcessing).toHaveBeenCalledTimes(1);
     expect(useStore.getState().retryCount).toBe(1); // Initial attempt counts as 1
+  });
+
+  it("should read API key from URL fragment and store it", async () => {
+    const testApiKey = "test-api-key-from-url";
+    windowLocationHashSpy.mockReturnValue(`#unsplash_api_key=${testApiKey}`);
+
+    render(<App />);
+
+    // Ensure the API key is set in the store
+    expect(useStore.getState().unsplashApiKey).toBe(testApiKey);
+
+    // Click the button to start processing
+    fireEvent.click(screen.getByRole("button", { name: "撮影/選択" }));
+
+    // Ensure runProcessing is called with the API key
+    expect(runProcessing).toHaveBeenCalledWith(testApiKey);
+  });
+
+  it("should display a warning if API key is missing", async () => {
+    windowLocationHashSpy.mockReturnValue(""); // No API key in URL
+
+    render(<App />);
+
+    // Ensure API key is null in store
+    expect(useStore.getState().unsplashApiKey).toBeNull();
+
+    // Click the button to start processing
+    fireEvent.click(screen.getByRole("button", { name: "撮影/選択" }));
+
+    // Expect an error message to be displayed
+    await screen.findByText(
+      /Unsplash API Key is missing. Please provide it in the URL fragment/,
+    );
+    expect(useStore.getState().status).toBe("error");
+    expect(runProcessing).not.toHaveBeenCalled();
   });
 });

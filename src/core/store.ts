@@ -8,6 +8,7 @@ export interface AppState {
   resolution: Resolution;
   retryCount: number;
   error: string | null;
+  unsplashApiKey: string | null; // New state for API key
 
   startProcessing: () => void;
   setSuccess: () => void;
@@ -16,6 +17,7 @@ export interface AppState {
   incrementRetryCount: () => void;
   handleProcessingError: (error: string) => void;
   logErrorToLocalStorage: (error: string) => void;
+  setUnsplashApiKey: (key: string) => void; // New action to set API key
   reset: () => void;
 }
 
@@ -26,6 +28,7 @@ export const useStore = create<AppState>((set, get) => ({
   resolution: 720,
   retryCount: 0,
   error: null,
+  unsplashApiKey: null, // Initial state for API key
 
   startProcessing: () =>
     set({
@@ -70,6 +73,13 @@ export const useStore = create<AppState>((set, get) => ({
     errorLog.push({ timestamp, error });
     localStorage.setItem("errorLog", JSON.stringify(errorLog));
   },
+  setUnsplashApiKey: (key: string) => set({ unsplashApiKey: key }), // New action
   reset: () =>
-    set({ status: "idle", resolution: 720, retryCount: 0, error: null }),
+    set({
+      status: "idle",
+      resolution: 720,
+      retryCount: 0,
+      error: null,
+      unsplashApiKey: null,
+    }),
 }));
