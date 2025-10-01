@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { useStore, MAX_RETRIES } from "./core/store";
 import { runProcessing } from "./processing";
-import { LoadingCloud } from "./ui/LoadingCloud";
+import LoadingCloud from "./ui/LoadingCloud";
 
 const INITIAL_BACKOFF_DELAY = 1000; // 1 second
 

@@ -9,3 +9,5 @@ export type Seniority = {
   months: number;
   days: number;
 };
+
+export type ProcessingResolution = 720 | 540 | 360;
