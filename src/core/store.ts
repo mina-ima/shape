@@ -1,14 +1,14 @@
 import { create } from "zustand";
+import { ProcessingResolution } from './types';
 
 export type Status = "idle" | "processing" | "error" | "success";
-export type Resolution = 720 | 540 | 360;
 
 export interface AppState {
   status: Status;
-  resolution: Resolution;
+  processingResolution: ProcessingResolution;
   retryCount: number;
   error: string | null;
-  unsplashApiKey: string | null; // New state for API key
+  unsplashApiKey: string | null;
 
   startProcessing: () => void;
   setSuccess: () => void;
@@ -17,39 +17,40 @@ export interface AppState {
   incrementRetryCount: () => void;
   handleProcessingError: (error: string) => void;
   logErrorToLocalStorage: (error: string) => void;
-  setUnsplashApiKey: (key: string) => void; // New action to set API key
+  setUnsplashApiKey: (key: string) => void;
+  setProcessingResolution: (resolution: ProcessingResolution) => void;
   reset: () => void;
 }
 
-export const MAX_RETRIES = 3; // Max retries including the initial attempt
+export const MAX_RETRIES = 3;
 
 export const useStore = create<AppState>((set, get) => ({
   status: "idle",
-  resolution: 720,
+  processingResolution: 720,
   retryCount: 0,
   error: null,
-  unsplashApiKey: null, // Initial state for API key
+  unsplashApiKey: null,
 
   startProcessing: () =>
     set({
       status: "processing",
       error: null,
-      retryCount: 0, // Reset retry count on new process start
+      retryCount: 0,
     }),
   setSuccess: () => set({ status: "success" }),
   setError: (error: string) => set({ status: "error", error }),
   decrementResolution: () => {
-    const currentResolution = get().resolution;
-    const nextResolution: Resolution = currentResolution === 720 ? 540 : 360;
+    const currentResolution = get().processingResolution;
+    const nextResolution: ProcessingResolution = currentResolution === 720 ? 540 : 360;
     if (currentResolution > 360) {
-      set({ resolution: nextResolution });
+      set({ processingResolution: nextResolution });
     }
   },
   incrementRetryCount: () =>
     set((state) => ({ retryCount: state.retryCount + 1 })),
   handleProcessingError: (error: string) => {
     const {
-      resolution,
+      processingResolution,
       retryCount,
       decrementResolution,
       setError,
@@ -57,11 +58,10 @@ export const useStore = create<AppState>((set, get) => ({
     } = get();
 
     if (retryCount < MAX_RETRIES - 1) {
-      // Allow MAX_RETRIES attempts (initial + MAX_RETRIES-1 retries)
-      if (resolution > 360) {
+      if (processingResolution > 360) {
         decrementResolution();
       }
-      set({ status: "processing", error: null }); // Prepare for retry
+      set({ status: "processing", error: null });
     } else {
       setError(error);
       logErrorToLocalStorage(error);
@@ -73,11 +73,12 @@ export const useStore = create<AppState>((set, get) => ({
     errorLog.push({ timestamp, error });
     localStorage.setItem("errorLog", JSON.stringify(errorLog));
   },
-  setUnsplashApiKey: (key: string) => set({ unsplashApiKey: key }), // New action
+  setUnsplashApiKey: (key: string) => set({ unsplashApiKey: key }),
+  setProcessingResolution: (resolution: ProcessingResolution) => set({ processingResolution: resolution }),
   reset: () =>
     set({
       status: "idle",
-      resolution: 720,
+      processingResolution: 720,
       retryCount: 0,
       error: null,
       unsplashApiKey: null,
