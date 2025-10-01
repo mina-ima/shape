@@ -128,4 +128,22 @@ describe("Tabs Component", () => {
     expect(tab3).toHaveFocus();
     expect(screen.getByText("Content 3")).toBeVisible();
   });
+
+  it("should be controllable by external state", () => {
+    const mockOnTabChange = vi.fn();
+    render(
+      <Tabs activeTab={0} onTabChange={mockOnTabChange}>
+        <TabPanel label="Tab 1">Content 1</TabPanel>
+        <TabPanel label="Tab 2">Content 2</TabPanel>
+      </Tabs>,
+    );
+
+    const tab2 = screen.getByText("Tab 2");
+    fireEvent.click(tab2);
+
+    expect(mockOnTabChange).toHaveBeenCalledWith(1);
+    // The active tab should not change visually because it's controlled externally
+    expect(screen.getByText("Content 1")).toBeVisible();
+    expect(screen.queryByText("Content 2")).not.toBeVisible();
+  });
 });

@@ -12,26 +12,40 @@ export const TabPanel: React.FC<TabPanelProps> = ({ children }) => {
 interface TabsProps {
   children: React.ReactElement<TabPanelProps>[];
   defaultActiveTab?: number;
+  activeTab?: number;
+  onTabChange?: (index: number) => void;
 }
 
 export const Tabs: React.FC<TabsProps> = ({
   children,
   defaultActiveTab = 0,
+  activeTab: controlledActiveTab,
+  onTabChange,
 }) => {
-  const [activeTab, setActiveTab] = useState(defaultActiveTab);
+  const [internalActiveTab, setInternalActiveTab] = useState(defaultActiveTab);
+
+  const currentActiveTab =
+    controlledActiveTab !== undefined ? controlledActiveTab : internalActiveTab;
+
+  const handleTabChange = (index: number) => {
+    if (controlledActiveTab === undefined) {
+      setInternalActiveTab(index);
+    }
+    onTabChange?.(index);
+  };
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
     const tabs = React.Children.toArray(
       children,
     ) as React.ReactElement<TabPanelProps>[];
-    let newIndex = activeTab;
+    let newIndex = currentActiveTab;
 
     switch (event.key) {
       case "ArrowRight":
-        newIndex = (activeTab + 1) % tabs.length;
+        newIndex = (currentActiveTab + 1) % tabs.length;
         break;
       case "ArrowLeft":
-        newIndex = (activeTab - 1 + tabs.length) % tabs.length;
+        newIndex = (currentActiveTab - 1 + tabs.length) % tabs.length;
         break;
       case "Home":
         newIndex = 0;
@@ -43,7 +57,7 @@ export const Tabs: React.FC<TabsProps> = ({
         return;
     }
 
-    setActiveTab(newIndex);
+    handleTabChange(newIndex);
     // Focus the new tab
     const newTabButton = document.getElementById(`tab-${newIndex}`);
     newTabButton?.focus();
@@ -54,11 +68,11 @@ export const Tabs: React.FC<TabsProps> = ({
       {React.Children.map(children, (child, index) => (
         <button
           role="tab"
-          aria-selected={index === activeTab}
+          aria-selected={index === currentActiveTab}
           aria-controls={`panel-${index}`}
           id={`tab-${index}`}
-          tabIndex={index === activeTab ? 0 : -1}
-          onClick={() => setActiveTab(index)}
+          tabIndex={index === currentActiveTab ? 0 : -1}
+          onClick={() => handleTabChange(index)}
           onKeyDown={(e) => handleKeyDown(e)}
         >
           {child.props.label}
@@ -69,7 +83,7 @@ export const Tabs: React.FC<TabsProps> = ({
           role="tabpanel"
           id={`panel-${index}`}
           aria-labelledby={`tab-${index}`}
-          hidden={index !== activeTab}
+          hidden={index !== currentActiveTab}
         >
           {child.props.children}
         </div>
