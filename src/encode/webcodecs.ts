@@ -61,7 +61,7 @@ export async function encodeWithWebCodecs(
       videoEncoder.close();
 
       const blob = new Blob(
-        encodedChunks.map((chunk) => chunk.data),
+        encodedChunks.map((chunk) => chunk.data as ArrayBuffer),
         { type: mimeType },
       );
       resolve(blob);
