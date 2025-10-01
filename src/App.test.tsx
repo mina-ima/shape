@@ -3,6 +3,7 @@ import type { Mock } from "vitest";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import App from "./App";
 import { useStore, MAX_RETRIES } from "./core/store";
+import * as modelModule from "./segmentation/model"; // Import the module to spy on
 
 // Mock the processing module that will be used in App.tsx
 vi.mock("./processing", () => ({
@@ -14,6 +15,7 @@ import { runProcessing } from "./processing";
 describe("App", () => {
   let localStorageSetItemSpy: vi.SpyInstance;
   let consoleLogSpy: vi.SpyInstance;
+  let loadOnnxModelSpy: vi.SpyInstance;
 
   beforeEach(() => {
     // Reset store and mocks before each test
@@ -31,12 +33,16 @@ describe("App", () => {
 
     // Spy on console.log to check backoff messages
     consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    // Spy on loadOnnxModel
+    loadOnnxModelSpy = vi.spyOn(modelModule, "loadOnnxModel");
   });
 
   afterEach(() => {
     vi.useRealTimers(); // Restore real timers
     localStorageSetItemSpy.mockRestore();
     consoleLogSpy.mockRestore();
+    loadOnnxModelSpy.mockRestore();
   });
 
   it("should render the initial button", () => {
@@ -44,6 +50,23 @@ describe("App", () => {
     expect(
       screen.getByRole("button", { name: "撮影/選択" }),
     ).toBeInTheDocument();
+  });
+
+  it("should not load the ONNX model until processing starts", async () => {
+    render(<App />);
+
+    // Model should not be loaded immediately on app render
+    expect(loadOnnxModelSpy).not.toHaveBeenCalled();
+
+    // Start the process
+    fireEvent.click(screen.getByRole("button", { name: "撮影/選択" }));
+
+    // Wait for processing to start, which should trigger model loading
+    await screen.findByText("処理中... (解像度: 720)");
+
+    // Model should now be loaded
+    expect(loadOnnxModelSpy).toHaveBeenCalledTimes(1);
+    expect(loadOnnxModelSpy).toHaveBeenCalledWith("/public/models/u2net.onnx");
   });
 
   it("should automatically cycle through resolutions on failure with exponential backoff and log error", async () => {
@@ -66,7 +89,7 @@ describe("App", () => {
     await act(async () => {
       vi.advanceTimersByTime(1000); // Advance by 1 second
     });
-    await screen.findByText("処理中... (解像度: 540)");
+    await screen.findByText("処理中... (解解像度: 540)");
     expect(runProcessing).toHaveBeenCalledTimes(2);
     expect(consoleLogSpy).toHaveBeenCalledWith(
       `Attempt 2 with resolution 540. Next retry in 1s.`,
