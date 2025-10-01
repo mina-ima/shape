@@ -5,7 +5,7 @@ export const getMediaStream = async (): Promise<MediaStream | undefined> => {
   } catch (error) {
     if (error instanceof DOMException && error.name === "NotAllowedError") {
       console.warn("Camera permission denied.");
-      return selectImageFile();
+      return undefined;
     } else {
       console.error("Error accessing camera:", error);
       return undefined;
