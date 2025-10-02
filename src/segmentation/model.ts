@@ -1,7 +1,7 @@
 import { InferenceSession, Tensor, env } from "onnxruntime-web";
 import { generateLowPrecisionMask } from "./lowPrecision";
-import { AppState, useStore } from '@/core/store';
-import { ProcessingResolution } from '@/core/types';
+import { useStore } from "@/core/store";
+import { ProcessingResolution } from "@/core/types";
 
 let session: InferenceSession | null = null;
 let lowPrecisionMode = false;
@@ -48,7 +48,8 @@ function getOnnxInputDimensions(
 
 export async function runOnnxInference(inputTensor: Tensor): Promise<Tensor> {
   const { processingResolution, setProcessingResolution } = useStore.getState();
-  const [targetWidth, targetHeight] = getOnnxInputDimensions(processingResolution);
+  const [targetWidth, targetHeight] =
+    getOnnxInputDimensions(processingResolution);
 
   // Simulate memory/timeout error for testing purposes - DISABLED for performance testing
   // const simulateError = Math.random() < 0.1; // 10% chance to simulate error
@@ -92,7 +93,9 @@ export async function runOnnxInference(inputTensor: Tensor): Promise<Tensor> {
     return output as Tensor;
   } catch (error) {
     console.error("ONNX inference failed:", error);
-    const currentResolutionIndex = [720, 540, 360].indexOf(processingResolution);
+    const currentResolutionIndex = [720, 540, 360].indexOf(
+      processingResolution,
+    );
     if (currentResolutionIndex < 2) {
       // If not already at the lowest resolution (360p)
       const nextResolution = ([720, 540, 360] as ProcessingResolution[])[

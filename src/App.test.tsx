@@ -3,7 +3,18 @@ import type { Mock } from "vitest";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import App from "./App";
 import { useStore, MAX_RETRIES } from "./core/store";
-import * as modelModule from "./segmentation/model"; // Import the module to spy on
+
+// vi.hoisted を使用してモック関数を定義
+const { mockLoadOnnxModel } = vi.hoisted(() => {
+  return {
+    mockLoadOnnxModel: vi.fn(),
+  };
+});
+
+// src/segmentation/model モジュールをモック
+vi.mock("./segmentation/model", () => ({
+  loadOnnxModel: mockLoadOnnxModel,
+}));
 
 // Mock the processing module that will be used in App.tsx
 vi.mock("./processing", () => ({
@@ -15,8 +26,7 @@ import { runProcessing } from "./processing";
 describe("App", () => {
   let localStorageSetItemSpy: vi.SpyInstance;
   let consoleLogSpy: vi.SpyInstance;
-  let loadOnnxModelSpy: vi.SpyInstance;
-  let windowLocationHashSpy: vi.SpyInstance;
+  let originalLocationHashDescriptor: PropertyDescriptor | undefined;
 
   beforeEach(() => {
     // Reset store and mocks before each test
@@ -35,19 +45,31 @@ describe("App", () => {
     // Spy on console.log to check backoff messages
     consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
-    // Spy on loadOnnxModel
-    loadOnnxModelSpy = vi.spyOn(modelModule, "loadOnnxModel");
+    // Clear mock for loadOnnxModel
+    mockLoadOnnxModel.mockClear();
 
     // Mock window.location.hash
-    windowLocationHashSpy = vi.spyOn(window.location, "hash", "get");
+    originalLocationHashDescriptor = Object.getOwnPropertyDescriptor(
+      window.location,
+      "hash",
+    );
+    Object.defineProperty(window.location, "hash", {
+      configurable: true,
+      get: vi.fn(() => ""), // デフォルト値を設定
+    });
   });
 
   afterEach(() => {
     vi.useRealTimers(); // Restore real timers
     localStorageSetItemSpy.mockRestore();
     consoleLogSpy.mockRestore();
-    loadOnnxModelSpy.mockRestore();
-    windowLocationHashSpy.mockRestore();
+    if (originalLocationHashDescriptor) {
+      Object.defineProperty(
+        window.location,
+        "hash",
+        originalLocationHashDescriptor,
+      );
+    }
   });
 
   it("should render the initial button", () => {
@@ -61,7 +83,7 @@ describe("App", () => {
     render(<App />);
 
     // Model should not be loaded immediately on app render
-    expect(loadOnnxModelSpy).not.toHaveBeenCalled();
+    expect(mockLoadOnnxModel).not.toHaveBeenCalled();
 
     // Start the process
     fireEvent.click(screen.getByRole("button", { name: "撮影/選択" }));
@@ -70,8 +92,8 @@ describe("App", () => {
     await screen.findByText("処理中... (解像度: 720)");
 
     // Model should now be loaded
-    expect(loadOnnxModelSpy).toHaveBeenCalledTimes(1);
-    expect(loadOnnxModelSpy).toHaveBeenCalledWith("/public/models/u2net.onnx");
+    expect(mockLoadOnnxModel).toHaveBeenCalledTimes(1);
+    expect(mockLoadOnnxModel).toHaveBeenCalledWith("/public/models/u2net.onnx");
   });
 
   it("should automatically cycle through resolutions on failure with exponential backoff and log error", async () => {
@@ -133,7 +155,7 @@ describe("App", () => {
       screen.getByRole("button", { name: "撮影/選択" }),
     ).toBeInTheDocument();
     expect(useStore.getState().status).toBe("idle");
-    expect(useStore.getState().resolution).toBe(720);
+    expect(useStore.getState().processingResolution).toBe(720);
     expect(useStore.getState().retryCount).toBe(0);
   });
 
@@ -158,7 +180,10 @@ describe("App", () => {
 
   it("should read API key from URL fragment and store it", async () => {
     const testApiKey = "test-api-key-from-url";
-    windowLocationHashSpy.mockReturnValue(`#unsplash_api_key=${testApiKey}`);
+    Object.defineProperty(window.location, "hash", {
+      configurable: true,
+      get: vi.fn(() => `#unsplash_api_key=${testApiKey}`),
+    });
 
     render(<App />);
 
@@ -173,7 +198,10 @@ describe("App", () => {
   });
 
   it("should display a warning if API key is missing", async () => {
-    windowLocationHashSpy.mockReturnValue(""); // No API key in URL
+    Object.defineProperty(window.location, "hash", {
+      configurable: true,
+      get: vi.fn(() => ""),
+    });
 
     render(<App />);
 

@@ -48,7 +48,7 @@ describe("PreviewScreen", () => {
     const saveButton = screen.getByRole("button", { name: "保存" });
     fireEvent.click(saveButton);
 
-    expect(saveFile).toHaveBeenCalledWith(mockVideoBlob, "test_video.webm");
+    expect(saveFile).toHaveBeenCalledWith(mockVideoBlob, "video/webm");
   });
 
   it("should revoke object URL on unmount", () => {

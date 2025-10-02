@@ -87,7 +87,7 @@ export default defineConfig({
   },
   server: {
     // Enable HTTPS for development server
-    https: true,
+    // https: true,
   },
   test: {
     globals: true,
@@ -97,6 +97,7 @@ export default defineConfig({
       enabled: true,
       name: "chromium",
       provider: "playwright",
+      ignoreHTTPSErrors: true,
     },
   },
   resolve: {

@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { ProcessingResolution } from './types';
+import { ProcessingResolution } from "./types";
 
 export type Status = "idle" | "processing" | "error" | "success";
 
@@ -41,7 +41,8 @@ export const useStore = create<AppState>((set, get) => ({
   setError: (error: string) => set({ status: "error", error }),
   decrementResolution: () => {
     const currentResolution = get().processingResolution;
-    const nextResolution: ProcessingResolution = currentResolution === 720 ? 540 : 360;
+    const nextResolution: ProcessingResolution =
+      currentResolution === 720 ? 540 : 360;
     if (currentResolution > 360) {
       set({ processingResolution: nextResolution });
     }
@@ -74,7 +75,8 @@ export const useStore = create<AppState>((set, get) => ({
     localStorage.setItem("errorLog", JSON.stringify(errorLog));
   },
   setUnsplashApiKey: (key: string) => set({ unsplashApiKey: key }),
-  setProcessingResolution: (resolution: ProcessingResolution) => set({ processingResolution: resolution }),
+  setProcessingResolution: (resolution: ProcessingResolution) =>
+    set({ processingResolution: resolution }),
   reset: () =>
     set({
       status: "idle",
