@@ -5,11 +5,17 @@ const {
   mockEncodeWithWebCodecs,
   mockEncodeWithMediaRecorder,
   mockEncodeWithFFmpeg,
+  mockCvMat,
 } = vi.hoisted(() => {
   return {
     mockEncodeWithWebCodecs: vi.fn(),
     mockEncodeWithMediaRecorder: vi.fn(),
     mockEncodeWithFFmpeg: vi.fn(),
+    mockCvMat: vi.fn(() => ({
+      cols: 1280,
+      rows: 720,
+      delete: vi.fn(),
+    })),
   };
 });
 
@@ -21,6 +27,14 @@ vi.mock("./mediarec", () => ({
 }));
 vi.mock("./ffmpeg", () => ({
   encodeWithFFmpeg: mockEncodeWithFFmpeg,
+}));
+
+// Mock OpenCV.js (cv)
+vi.mock("@techstark/opencv-js", () => ({
+  __esModule: true,
+  default: {
+    Mat: mockCvMat,
+  },
 }));
 
 import { encodeVideo, getPreferredMimeType } from "./encoder";
@@ -195,7 +209,8 @@ describe("Video Encoder Fallback Logic", () => {
 });
 
 describe("Video Encoding Performance", () => {
-  const mockFrames = Array(5 * 30).fill(new cv.Mat()); // 5 seconds of 30fps frames
+  // @ts-expect-error: Mocking cv.Mat for testing purposes
+  const mockFrames = Array(5 * 30).fill(new mockCvMat()); // 5 seconds of 30fps frames
   const fps = 30;
 
   beforeEach(() => {

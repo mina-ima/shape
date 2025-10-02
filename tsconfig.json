@@ -17,7 +17,11 @@
     "isolatedModules": true,
     "noEmit": true,
     "jsx": "react-jsx",
-    "types": ["@testing-library/jest-dom", "vite-plugin-pwa/client", "vitest/globals"],
+    "types": [
+      "@testing-library/jest-dom",
+      "vite-plugin-pwa/client",
+      "vitest/globals"
+    ],
     "typeRoots": ["./node_modules/@types", "./node_modules"],
     "baseUrl": ".",
     "paths": {

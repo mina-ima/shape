@@ -77,9 +77,17 @@ describe("saveFile", () => {
 
   it("should retry with alternative MIME type if saving with preferred one fails", async () => {
     // Make the first call fail, second succeed
-    (window.showSaveFilePicker as Mock)
-      .mockRejectedValueOnce(new DOMException("Save failed", "AbortError"))
-      .mockResolvedValueOnce(mockFileHandle);
+    let callCount = 0;
+    (window.showSaveFilePicker as Mock).mockImplementation(async (_options) => {
+      callCount++;
+      if (callCount === 1) {
+        // 最初の呼び出しは失敗
+        throw new DOMException("Save failed", "AbortError");
+      } else {
+        // 2回目の呼び出しは成功
+        return mockFileHandle;
+      }
+    });
 
     const blob = new Blob(["test"], { type: "video/webm" });
     await saveFile(blob, "video/webm");
@@ -104,18 +112,20 @@ describe("saveFile", () => {
 
   it("should fall back to <a> download if both MIME types fail", async () => {
     // Make both calls to showSaveFilePicker fail
-    (window.showSaveFilePicker as Mock).mockRejectedValue(
-      new DOMException("Save failed", "AbortError"),
-    );
+    (window.showSaveFilePicker as Mock).mockImplementation(async (_options) => {
+      throw new DOMException("Save failed", "AbortError");
+    });
 
     const mockLink = {
       href: "",
       download: "",
       click: vi.fn(),
+      remove: vi.fn(), // remove もモックに追加
     };
     window.URL.createObjectURL = vi.fn().mockReturnValue("blob:url");
     document.createElement = vi.fn().mockReturnValue(mockLink);
     document.body.appendChild = vi.fn();
+    document.body.removeChild = vi.fn(); // removeChild もモックに追加
 
     const blob = new Blob(["test"], { type: "video/webm" });
     await saveFile(blob, "video/webm");
