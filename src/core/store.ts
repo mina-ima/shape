@@ -49,19 +49,30 @@ export const useStore = create<AppState>((set, get) => ({
   },
   incrementRetryCount: () =>
     set((state) => ({ retryCount: state.retryCount + 1 })),
-  handleProcessingError: (error: string) => {
+  handleProcessingError: async (error: string) => {
     const {
       processingResolution,
       retryCount,
       decrementResolution,
       setError,
       logErrorToLocalStorage,
+      incrementRetryCount,
     } = get();
+
+    incrementRetryCount();
 
     if (retryCount < MAX_RETRIES - 1) {
       if (processingResolution > 360) {
         decrementResolution();
       }
+
+      const delay = Math.pow(2, retryCount) * 1000; // Exponential delay: 1s, 2s, 4s
+      console.log(
+        `Retrying in ${delay / 1000} seconds... (Attempt: ${retryCount + 2})`,
+      );
+
+      await new Promise((resolve) => setTimeout(resolve, delay));
+
       set({ status: "processing", error: null });
     } else {
       setError(error);
