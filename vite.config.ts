@@ -16,6 +16,7 @@ export default defineConfig({
       swSrc: "src/sw.ts",
       workbox: {
         globPatterns: ["**/*.{js,css,html,ico,png,svg,wasm,onnx}"],
+        maximumFileSizeToCacheInBytes: 50 * 1024 * 1024, // 50 MB に設定
         runtimeCaching: [
           {
             urlPattern: /^https:\/\/images\.unsplash\.com\/.*/i,
