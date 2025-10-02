@@ -31,7 +31,7 @@ function euclideanDistance(vecA: number[], vecB: number[]): number {
 
 // Normalization for Hu Moments (log transform is common)
 function normalizeHuMoments(huMoments: number[]): number[] {
-  return huMoments.map((m) => -Math.sign(m) * Math.log(Math.abs(m)));
+  return huMoments.map((m) => -Math.sign(m) * Math.log10(Math.abs(m)));
 }
 
 export async function calculateSimilarityScore(
@@ -54,6 +54,14 @@ export async function calculateSimilarityScore(
   cv.Canny(fgMaskGray, fgEdges, 50, 150, 3, false);
 
   const fgContourPoints = await extractLargestContour(fgEdges);
+  if (fgContourPoints.length === 0) {
+    // Clean up and return 0 if no contour is found
+    fgMat.delete();
+    fgMaskMat.delete();
+    fgMaskGray.delete();
+    fgEdges.delete();
+    return 0;
+  }
   const fgContour = new cv.Mat(fgContourPoints.length, 1, cv.CV_32SC2);
   for (let i = 0; i < fgContourPoints.length; ++i) {
     fgContour.data32S[i * 2] = fgContourPoints[i].x;
@@ -80,6 +88,13 @@ export async function calculateSimilarityScore(
   cv.Canny(bgGray, bgEdges, 50, 150, 3, false);
 
   const bgContourPoints = await extractLargestContour(bgEdges);
+  if (bgContourPoints.length === 0) {
+    // Clean up and return 0 if no contour is found
+    bgMat.delete();
+    bgGray.delete();
+    bgEdges.delete();
+    return 0;
+  }
   const bgContour = new cv.Mat(bgContourPoints.length, 1, cv.CV_32SC2);
   for (let i = 0; i < bgContourPoints.length; ++i) {
     bgContour.data32S[i * 2] = bgContourPoints[i].x;
@@ -95,13 +110,12 @@ export async function calculateSimilarityScore(
   bgContour.delete();
 
   // 3. Calculate Score
-  const w1 = 0.7; // Weight for EFD (shape similarity)
-  const w2 = 0.3; // Weight for Hu Moments (invariant moments)
+  const w1 = 0; // Weight for EFD (shape similarity)
+  const w2 = 1; // Weight for Hu Moments (invariant moments)
 
   const efdSimilarity = cosineSimilarity(fgEFD, bgEFD);
   const huMomentDistance = euclideanDistance(fgHuMoments, bgHuMoments);
-  const huMomentSimilarity =
-    1 - huMomentDistance / (Math.sqrt(fgHuMoments.length) * 2); // Normalize distance to 0-1 range
+  const huMomentSimilarity = 1 / (1 + huMomentDistance * 0.1);
 
   const score = w1 * efdSimilarity + w2 * huMomentSimilarity;
 
