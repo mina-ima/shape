@@ -11,12 +11,6 @@ export async function loadOnnxModel(modelPath: string): Promise<void> {
     return; // Avoid reloading if already loaded
   }
   try {
-    // Explicitly set the path to the WASM backend files.
-    // Vite serves the `public` directory at the root.
-    env.wasm.wasmPaths = "/";
-    // Use all available CPU cores for WASM execution, or a reasonable default
-    env.wasm.numThreads = navigator.hardwareConcurrency || 4;
-
     session = await InferenceSession.create(modelPath, {
       // Prioritize WebGL/WebGPU if available, then fall back to WASM
       executionProviders: ["webgl", "wasm"],
@@ -31,18 +25,18 @@ export async function loadOnnxModel(modelPath: string): Promise<void> {
   }
 }
 
-function getOnnxInputDimensions(
+export function getOnnxInputDimensions(
   resolution: ProcessingResolution,
 ): [number, number] {
   switch (resolution) {
     case 720:
-      return [512, 512]; // U2-Net common input size for higher quality
+      return [320, 320]; // U2-Net common input size for higher quality (adjusting to model's actual input)
     case 540:
       return [320, 320]; // U2-Net common input size for lower quality
     case 360:
       return [256, 256]; // Custom smaller size for very low resolution
     default:
-      return [512, 512];
+      return [320, 320];
   }
 }
 
