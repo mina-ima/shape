@@ -1,93 +1,88 @@
-import React, { useState } from "react";
+import React, { useState, useRef, useEffect, KeyboardEvent } from "react";
 
-interface TabPanelProps {
+interface TabItem {
+  id: string;
   label: string;
-  children: React.ReactNode;
+  content: React.ReactNode;
 }
-
-export const TabPanel: React.FC<TabPanelProps> = ({ children }) => {
-  return <>{children}</>;
-};
 
 interface TabsProps {
-  children: React.ReactElement<TabPanelProps>[];
-  defaultActiveTab?: number;
-  activeTab?: number;
-  onTabChange?: (index: number) => void;
+  items: TabItem[];
 }
 
-export const Tabs: React.FC<TabsProps> = ({
-  children,
-  defaultActiveTab = 0,
-  activeTab: controlledActiveTab,
-  onTabChange,
-}) => {
-  const [internalActiveTab, setInternalActiveTab] = useState(defaultActiveTab);
+const Tabs: React.FC<TabsProps> = ({ items }) => {
+  const [activeTab, setActiveTab] = useState(items[0]?.id);
+  const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
-  const currentActiveTab =
-    controlledActiveTab !== undefined ? controlledActiveTab : internalActiveTab;
+  useEffect(() => {
+    tabRefs.current = tabRefs.current.slice(0, items.length);
+  }, [items]);
 
-  const handleTabChange = (index: number) => {
-    if (controlledActiveTab === undefined) {
-      setInternalActiveTab(index);
-    }
-    onTabChange?.(index);
-  };
-
-  const handleKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
-    const tabs = React.Children.toArray(
-      children,
-    ) as React.ReactElement<TabPanelProps>[];
-    let newIndex = currentActiveTab;
-
+  const handleKeyDown = (
+    event: KeyboardEvent<HTMLButtonElement>,
+    index: number,
+  ) => {
     switch (event.key) {
       case "ArrowRight":
-        newIndex = (currentActiveTab + 1) % tabs.length;
+        event.preventDefault();
+        focusTab((index + 1) % items.length);
         break;
       case "ArrowLeft":
-        newIndex = (currentActiveTab - 1 + tabs.length) % tabs.length;
+        event.preventDefault();
+        focusTab((index - 1 + items.length) % items.length);
         break;
       case "Home":
-        newIndex = 0;
+        event.preventDefault();
+        focusTab(0);
         break;
       case "End":
-        newIndex = tabs.length - 1;
+        event.preventDefault();
+        focusTab(items.length - 1);
         break;
       default:
-        return;
+        break;
     }
+  };
 
-    handleTabChange(newIndex);
-    // Focus the new tab
-    const newTabButton = document.getElementById(`tab-${newIndex}`);
-    newTabButton?.focus();
+  const focusTab = (index: number) => {
+    tabRefs.current[index]?.focus();
+    setActiveTab(items[index].id);
   };
 
   return (
-    <div role="tablist">
-      {React.Children.map(children, (child, index) => (
-        <button
-          role="tab"
-          aria-selected={index === currentActiveTab}
-          aria-controls={`panel-${index}`}
-          id={`tab-${index}`}
-          tabIndex={index === currentActiveTab ? 0 : -1}
-          onClick={() => handleTabChange(index)}
-          onKeyDown={(e) => handleKeyDown(e)}
-        >
-          {child.props.label}
-        </button>
-      ))}
-      {React.Children.map(children, (child, index) => (
+    <div>
+      <div role="tablist" aria-label="Tab navigation">
+        {items.map((item, index) => (
+          <button
+            key={item.id}
+            id={item.id}
+            role="tab"
+            aria-selected={activeTab === item.id}
+            aria-controls={`${item.id}-panel`}
+            tabIndex={activeTab === item.id ? 0 : -1}
+            onClick={() => setActiveTab(item.id)}
+            onKeyDown={(e) => handleKeyDown(e, index)}
+            ref={(el) => {
+              tabRefs.current[index] = el;
+            }}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
+      {items.map((item) => (
         <div
+          key={`${item.id}-panel`}
+          id={`${item.id}-panel`}
           role="tabpanel"
-          id={`panel-${index}`}
-          aria-labelledby={`tab-${index}`}
-          hidden={index !== currentActiveTab}
+          aria-labelledby={item.id}
+          hidden={activeTab !== item.id}
         >
-          {child.props.children}
+          {item.content}
         </div>
       ))}
     </div>
   );
 };
+
+export default Tabs;
