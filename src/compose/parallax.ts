@@ -100,6 +100,7 @@ export async function generateParallaxFrames(
   cv.cvtColor(bgPadded, bgPaddedRgba, cv.COLOR_RGB2RGBA);
 
   const crossfadeFrames = Math.floor(crossfadeDuration * fps);
+  const fadeFrames = Math.min(crossfadeFrames, Math.floor(totalFrames / 2));
 
   for (let i = 0; i < totalFrames; i++) {
     const progress = totalFrames > 1 ? i / (totalFrames - 1) : 0;
@@ -162,36 +163,23 @@ export async function generateParallaxFrames(
 
     // Handle crossfade by adjusting the alpha channel of the entire frame
     let fadeAlpha = 1.0;
-    if (crossfadeFrames > 0) {
-      if (i < crossfadeFrames) {
-        fadeAlpha = i / crossfadeFrames;
-      } else if (i >= totalFrames - crossfadeFrames) {
-        fadeAlpha = (totalFrames - 1 - i) / crossfadeFrames;
+    if (fadeFrames > 0) {
+      const denominator = fadeFrames > 1 ? fadeFrames - 1 : 1;
+      if (i < fadeFrames) {
+        fadeAlpha = i / denominator;
+      } else if (i >= totalFrames - fadeFrames) {
+        fadeAlpha = (totalFrames - 1 - i) / denominator;
       }
     }
+    fadeAlpha = Math.max(0, Math.min(1, fadeAlpha)); // Clamp to [0, 1]
 
     if (fadeAlpha < 1.0) {
       const framePlanes = new cv.MatVector();
       cv.split(warpedBgRgba, framePlanes);
       const frameAlpha = framePlanes.get(3);
-      frameAlpha.convertTo(frameAlpha, cv.CV_8U, fadeAlpha);
-
-      const r = framePlanes.get(0);
-      const g = framePlanes.get(1);
-      const b = framePlanes.get(2);
-      const newFramePlanes = new cv.MatVector();
-      newFramePlanes.push_back(r);
-      newFramePlanes.push_back(g);
-      newFramePlanes.push_back(b);
-      newFramePlanes.push_back(frameAlpha);
-      cv.merge(newFramePlanes, warpedBgRgba);
-
-      r.delete();
-      g.delete();
-      b.delete();
-      newFramePlanes.delete();
+      frameAlpha.convertTo(frameAlpha, -1, fadeAlpha);
+      cv.merge(framePlanes, warpedBgRgba);
       framePlanes.delete();
-      frameAlpha.delete();
     }
 
     frames.push(warpedBgRgba);

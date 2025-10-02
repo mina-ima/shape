@@ -176,4 +176,76 @@ describe("Parallax Animation", () => {
     backgroundLayer.delete();
     frames.forEach((f) => f.delete());
   });
+
+  it("should return an empty array when duration is 0", async () => {
+    const width = 100;
+    const height = 100;
+    const duration = 0; // 0 seconds
+    const fps = 30;
+
+    const fgData = new Uint8Array(width * height * 4).fill(255);
+    const bgData = new Uint8Array(width * height * 3).fill(128);
+    const foregroundLayer = new cv.Mat(height, width, cv.CV_8UC4);
+    foregroundLayer.data.set(fgData);
+    const backgroundLayer = new cv.Mat(height, width, cv.CV_8UC3);
+    backgroundLayer.data.set(bgData);
+
+    const frames = await generateParallaxFrames(
+      cv,
+      foregroundLayer,
+      backgroundLayer,
+      width,
+      height,
+      duration,
+      fps,
+      0,
+    );
+
+    expect(frames).toBeInstanceOf(Array);
+    expect(frames.length).toBe(0);
+
+    foregroundLayer.delete();
+    backgroundLayer.delete();
+  });
+
+  it("should handle crossfade duration equal to total duration", async () => {
+    const width = 100;
+    const height = 100;
+    const duration = 4; // seconds
+    const fps = 10;
+    const totalFrames = duration * fps; // 40
+    const crossfadeDuration = 4; // seconds, equal to total duration
+
+    const fgData = new Uint8Array(width * height * 4).fill(255);
+    const bgData = new Uint8Array(width * height * 3).fill(128);
+    const foregroundLayer = new cv.Mat(height, width, cv.CV_8UC4);
+    foregroundLayer.data.set(fgData);
+    const backgroundLayer = new cv.Mat(height, width, cv.CV_8UC3);
+    backgroundLayer.data.set(bgData);
+
+    const frames = await generateParallaxFrames(
+      cv,
+      foregroundLayer,
+      backgroundLayer,
+      width,
+      height,
+      duration,
+      fps,
+      crossfadeDuration,
+    );
+
+    expect(frames.length).toBe(totalFrames);
+
+    // The middle frame should be fully opaque
+    const midFrameIndex = Math.floor(totalFrames / 2);
+    const midFrame = frames[midFrameIndex];
+    const midFrameAlpha = midFrame.data[3]; // Alpha of the first pixel
+
+    // The alpha of the merged frame is tested. The underlying layers are opaque.
+    expect(midFrameAlpha).toBe(255);
+
+    foregroundLayer.delete();
+    backgroundLayer.delete();
+    frames.forEach((f) => f.delete());
+  });
 });
