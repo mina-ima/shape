@@ -21,21 +21,35 @@ const Tabs: React.FC<TabsProps> = ({ children }) => {
             role="tab"
             aria-selected={index === activeTab}
             onClick={() => setActiveTab(index)}
-            onKeyDown={(event) => {
-              if (event.key === "ArrowRight") {
-                setActiveTab(
-                  (prevActiveTab) => (prevActiveTab + 1) % children.length,
-                );
-              } else if (event.key === "ArrowLeft") {
-                setActiveTab(
-                  (prevActiveTab) =>
-                    (prevActiveTab - 1 + children.length) % children.length,
-                );
-              } else if (event.key === "Home") {
-                setActiveTab(0);
-              } else if (event.key === "End") {
-                setActiveTab(children.length - 1);
+            onKeyDown={(e) => {
+              let newIndex = activeTab;
+              switch (e.key) {
+                case "ArrowRight":
+                  newIndex = (activeTab + 1) % children.length;
+                  break;
+                case "ArrowLeft":
+                  newIndex =
+                    (activeTab - 1 + children.length) % children.length;
+                  break;
+                case "Home":
+                  newIndex = 0;
+                  break;
+                case "End":
+                  newIndex = children.length - 1;
+                  break;
+                case "Enter":
+                case " ":
+                  setActiveTab(newIndex);
+                  break;
+                default:
+                  return;
               }
+              setActiveTab(newIndex);
+              // Focus the new tab
+              const newTab = e.currentTarget.parentElement?.children[
+                newIndex
+              ] as HTMLElement;
+              newTab?.focus();
             }}
           >
             {child.props.title}
