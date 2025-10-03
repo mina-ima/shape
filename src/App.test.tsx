@@ -24,17 +24,11 @@ vi.mock("./processing", () => ({
 import { runProcessing } from "./processing";
 
 describe("App", () => {
-  let localStorageSetItemSpy: vi.SpyInstance;
-  let consoleLogSpy: vi.SpyInstance;
   let originalLocationHashDescriptor: PropertyDescriptor | undefined;
 
   beforeEach(() => {
-    // Reset store and mocks before each test
-    act(() => {
-      useStore.getState().reset();
-    });
-    vi.clearAllMocks();
-    vi.useFakeTimers(); // Use fake timers for exponential backoff testing
+    vi.useFakeTimers(); // タイマーをモック
+    vi.setSystemTime(MOCK_DATE); // システム時間を設定
 
     // Mock localStorage
     localStorageSetItemSpy = vi
@@ -42,11 +36,8 @@ describe("App", () => {
       .mockImplementation(() => {});
     vi.spyOn(localStorage, "getItem").mockImplementation(() => "[]");
 
-    // Spy on console.log to check backoff messages
-    consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-
-    // Clear mock for loadOnnxModel
-    mockLoadOnnxModel.mockClear();
+    // Mock console.warn
+    consoleLogSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     // Mock window.location.hash
     originalLocationHashDescriptor = Object.getOwnPropertyDescriptor(
@@ -56,13 +47,14 @@ describe("App", () => {
     Object.defineProperty(window.location, "hash", {
       configurable: true,
       get: vi.fn(() => ""), // デフォルト値を設定
+      set: vi.fn(),
     });
   });
 
   afterEach(() => {
     vi.useRealTimers(); // Restore real timers
-    localStorageSetItemSpy.mockRestore();
-    consoleLogSpy.mockRestore();
+    vi.restoreAllMocks(); // すべてのモックを元に戻す
+    localStorage.clear(); // localStorage をクリア
     if (originalLocationHashDescriptor) {
       Object.defineProperty(
         window.location,
