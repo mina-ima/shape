@@ -17,6 +17,13 @@ describe("camera module", () => {
   let createElementSpy: vi.SpyInstance;
 
   beforeEach(() => {
+    // Mock navigator.mediaDevices as it might not exist in the test environment
+    if (!navigator.mediaDevices) {
+      // @ts-expect-error - Mocking read-only property
+      navigator.mediaDevices = { getUserMedia: vi.fn() };
+    } else if (!navigator.mediaDevices.getUserMedia) {
+      navigator.mediaDevices.getUserMedia = vi.fn();
+    }
     getUserMediaSpy = vi.spyOn(navigator.mediaDevices, "getUserMedia");
     createImageBitmapSpy = vi.spyOn(globalThis, "createImageBitmap");
     createElementSpy = vi.spyOn(document, "createElement");

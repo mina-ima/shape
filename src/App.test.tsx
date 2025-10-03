@@ -23,7 +23,11 @@ vi.mock("./processing", () => ({
 
 import { runProcessing } from "./processing";
 
+const MOCK_DATE = new Date("2023-10-27T10:00:00.000Z");
+
 describe("App", () => {
+  let localStorageSetItemSpy: vi.SpyInstance;
+  let consoleLogSpy: vi.SpyInstance;
   let originalLocationHashDescriptor: PropertyDescriptor | undefined;
 
   beforeEach(() => {
@@ -34,10 +38,6 @@ describe("App", () => {
     localStorageSetItemSpy = vi
       .spyOn(localStorage, "setItem")
       .mockImplementation(() => {});
-    vi.spyOn(localStorage, "getItem").mockImplementation(() => "[]");
-
-    // Mock console.warn
-    consoleLogSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     // Mock window.location.hash
     originalLocationHashDescriptor = Object.getOwnPropertyDescriptor(
@@ -46,13 +46,14 @@ describe("App", () => {
     );
     Object.defineProperty(window.location, "hash", {
       configurable: true,
-      get: vi.fn(() => ""), // デフォルト値を設定
-      set: vi.fn(),
+      writable: true,
+      value: "",
     });
   });
 
   afterEach(() => {
-    vi.useRealTimers(); // Restore real timers
+    vi.runOnlyPendingTimers();
+    vi.useRealTimers();
     vi.restoreAllMocks(); // すべてのモックを元に戻す
     localStorage.clear(); // localStorage をクリア
     if (originalLocationHashDescriptor) {
