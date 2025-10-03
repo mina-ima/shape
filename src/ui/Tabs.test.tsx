@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, act } from "@testing-library/react";
+import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
 import { describe, it, expect } from "vitest";
 import Tabs from "./Tabs";
 
@@ -32,33 +32,26 @@ describe("Tabs", () => {
     const tab2 = screen.getByRole("tab", { name: "勤続年数" });
     const tab3 = screen.getByRole("tab", { name: "定年まで" });
 
+    act(() => {
+      tab1.focus();
+    });
     fireEvent.click(tab1);
-    expect(tab1).toHaveAttribute("aria-selected", "true");
+    await waitFor(() => expect(tab1).toHaveAttribute("aria-selected", "true"));
 
-    await act(async () => {
-      fireEvent.keyDown(tab1, { key: "ArrowRight" });
-    });
-    expect(tab2).toHaveAttribute("aria-selected", "true");
+    fireEvent.keyDown(tab1, { key: "ArrowRight" });
+    await waitFor(() => expect(tab2).toHaveAttribute("aria-selected", "true"));
 
-    await act(async () => {
-      fireEvent.keyDown(tab2, { key: "ArrowRight" });
-    });
-    expect(tab3).toHaveAttribute("aria-selected", "true");
+    fireEvent.keyDown(tab2, { key: "ArrowRight" });
+    await waitFor(() => expect(tab3).toHaveAttribute("aria-selected", "true"));
 
-    await act(async () => {
-      fireEvent.keyDown(tab3, { key: "ArrowRight" }); // Should loop back to tab1 or stay on tab3
-    });
-    expect(tab1).toHaveAttribute("aria-selected", "true"); // Assuming loop
+    fireEvent.keyDown(tab3, { key: "ArrowRight" }); // Should loop
+    await waitFor(() => expect(tab1).toHaveAttribute("aria-selected", "true"));
 
-    await act(async () => {
-      fireEvent.keyDown(tab1, { key: "ArrowLeft" });
-    });
-    expect(tab3).toHaveAttribute("aria-selected", "true"); // Assuming loop
+    fireEvent.keyDown(tab1, { key: "ArrowLeft" }); // Should loop
+    await waitFor(() => expect(tab3).toHaveAttribute("aria-selected", "true"));
 
-    await act(async () => {
-      fireEvent.keyDown(tab3, { key: "ArrowLeft" });
-    });
-    expect(tab2).toHaveAttribute("aria-selected", "true");
+    fireEvent.keyDown(tab3, { key: "ArrowLeft" });
+    await waitFor(() => expect(tab2).toHaveAttribute("aria-selected", "true"));
   });
 
   it("navigates to the first tab with Home key", async () => {
@@ -73,13 +66,14 @@ describe("Tabs", () => {
     const tab1 = screen.getByRole("tab", { name: "年齢・和暦" });
     const tab2 = screen.getByRole("tab", { name: "勤続年数" });
 
-    fireEvent.click(tab2);
-    expect(tab2).toHaveAttribute("aria-selected", "true");
-
-    await act(async () => {
-      fireEvent.keyDown(tab2, { key: "Home" });
+    act(() => {
+      tab2.focus();
     });
-    expect(tab1).toHaveAttribute("aria-selected", "true");
+    fireEvent.click(tab2);
+    await waitFor(() => expect(tab2).toHaveAttribute("aria-selected", "true"));
+
+    fireEvent.keyDown(tab2, { key: "Home" });
+    await waitFor(() => expect(tab1).toHaveAttribute("aria-selected", "true"));
   });
 
   it("navigates to the last tab with End key", async () => {
@@ -94,13 +88,14 @@ describe("Tabs", () => {
     const tab1 = screen.getByRole("tab", { name: "年齢・和暦" });
     const tab3 = screen.getByRole("tab", { name: "定年まで" });
 
-    fireEvent.click(tab1);
-    expect(tab1).toHaveAttribute("aria-selected", "true");
-
-    await act(async () => {
-      fireEvent.keyDown(tab1, { key: "End" });
+    act(() => {
+      tab1.focus();
     });
-    expect(tab3).toHaveAttribute("aria-selected", "true");
+    fireEvent.click(tab1);
+    await waitFor(() => expect(tab1).toHaveAttribute("aria-selected", "true"));
+
+    fireEvent.keyDown(tab1, { key: "End" });
+    await waitFor(() => expect(tab3).toHaveAttribute("aria-selected", "true"));
   });
 
   it("activates tab on Enter or Space key press", async () => {
@@ -114,17 +109,21 @@ describe("Tabs", () => {
     const tab1 = screen.getByRole("tab", { name: "年齢・和暦" });
     const tab2 = screen.getByRole("tab", { name: "勤続年数" });
 
-    fireEvent.click(tab1);
-    expect(tab1).toHaveAttribute("aria-selected", "true");
-
-    await act(async () => {
-      fireEvent.keyDown(tab2, { key: "Enter" });
+    act(() => {
+      tab1.focus();
     });
-    expect(tab2).toHaveAttribute("aria-selected", "true");
+    await waitFor(() => expect(tab1).toHaveAttribute("aria-selected", "true"));
 
-    await act(async () => {
-      fireEvent.keyDown(tab1, { key: " " }); // Space key
+    act(() => {
+      tab2.focus();
     });
-    expect(tab1).toHaveAttribute("aria-selected", "true");
+    fireEvent.keyDown(tab2, { key: "Enter" });
+    await waitFor(() => expect(tab2).toHaveAttribute("aria-selected", "true"));
+
+    act(() => {
+      tab1.focus();
+    });
+    fireEvent.keyDown(tab1, { key: " " }); // Space key
+    await waitFor(() => expect(tab1).toHaveAttribute("aria-selected", "true"));
   });
 });

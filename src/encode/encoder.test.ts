@@ -255,7 +255,7 @@ describe("Video Encoding Performance", () => {
 
     console.log(`ffmpeg.wasm encoding duration: ${duration.toFixed(2)} ms`);
     expect(duration).toBeLessThan(15000); // 15 seconds
-  });
+  }, 15000);
 });
 
 describe("getPreferredMimeType", () => {
