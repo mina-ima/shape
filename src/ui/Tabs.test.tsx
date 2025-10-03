@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, act } from "@testing-library/react";
 import { describe, it, expect } from "vitest";
 import Tabs from "./Tabs";
 
@@ -19,7 +19,7 @@ describe("Tabs", () => {
     expect(screen.getByRole("tab", { name: "退職所得" })).toBeInTheDocument();
   });
 
-  it("navigates tabs with ArrowRight and ArrowLeft keys", () => {
+  it("navigates tabs with ArrowRight and ArrowLeft keys", async () => {
     render(
       <Tabs>
         <div title="年齢・和暦">Content 1</div>
@@ -35,23 +35,33 @@ describe("Tabs", () => {
     fireEvent.click(tab1);
     expect(tab1).toHaveAttribute("aria-selected", "true");
 
-    fireEvent.keyDown(tab1, { key: "ArrowRight" });
+    await act(async () => {
+      fireEvent.keyDown(tab1, { key: "ArrowRight" });
+    });
     expect(tab2).toHaveAttribute("aria-selected", "true");
 
-    fireEvent.keyDown(tab2, { key: "ArrowRight" });
+    await act(async () => {
+      fireEvent.keyDown(tab2, { key: "ArrowRight" });
+    });
     expect(tab3).toHaveAttribute("aria-selected", "true");
 
-    fireEvent.keyDown(tab3, { key: "ArrowRight" }); // Should loop back to tab1 or stay on tab3
+    await act(async () => {
+      fireEvent.keyDown(tab3, { key: "ArrowRight" }); // Should loop back to tab1 or stay on tab3
+    });
     expect(tab1).toHaveAttribute("aria-selected", "true"); // Assuming loop
 
-    fireEvent.keyDown(tab1, { key: "ArrowLeft" });
+    await act(async () => {
+      fireEvent.keyDown(tab1, { key: "ArrowLeft" });
+    });
     expect(tab3).toHaveAttribute("aria-selected", "true"); // Assuming loop
 
-    fireEvent.keyDown(tab3, { key: "ArrowLeft" });
+    await act(async () => {
+      fireEvent.keyDown(tab3, { key: "ArrowLeft" });
+    });
     expect(tab2).toHaveAttribute("aria-selected", "true");
   });
 
-  it("navigates to the first tab with Home key", () => {
+  it("navigates to the first tab with Home key", async () => {
     render(
       <Tabs>
         <div title="年齢・和暦">Content 1</div>
@@ -66,11 +76,13 @@ describe("Tabs", () => {
     fireEvent.click(tab2);
     expect(tab2).toHaveAttribute("aria-selected", "true");
 
-    fireEvent.keyDown(tab2, { key: "Home" });
+    await act(async () => {
+      fireEvent.keyDown(tab2, { key: "Home" });
+    });
     expect(tab1).toHaveAttribute("aria-selected", "true");
   });
 
-  it("navigates to the last tab with End key", () => {
+  it("navigates to the last tab with End key", async () => {
     render(
       <Tabs>
         <div title="年齢・和暦">Content 1</div>
@@ -85,11 +97,13 @@ describe("Tabs", () => {
     fireEvent.click(tab1);
     expect(tab1).toHaveAttribute("aria-selected", "true");
 
-    fireEvent.keyDown(tab1, { key: "End" });
+    await act(async () => {
+      fireEvent.keyDown(tab1, { key: "End" });
+    });
     expect(tab3).toHaveAttribute("aria-selected", "true");
   });
 
-  it("activates tab on Enter or Space key press", () => {
+  it("activates tab on Enter or Space key press", async () => {
     render(
       <Tabs>
         <div title="年齢・和暦">Content 1</div>
@@ -103,10 +117,14 @@ describe("Tabs", () => {
     fireEvent.click(tab1);
     expect(tab1).toHaveAttribute("aria-selected", "true");
 
-    fireEvent.keyDown(tab2, { key: "Enter" });
+    await act(async () => {
+      fireEvent.keyDown(tab2, { key: "Enter" });
+    });
     expect(tab2).toHaveAttribute("aria-selected", "true");
 
-    fireEvent.keyDown(tab1, { key: " " }); // Space key
+    await act(async () => {
+      fireEvent.keyDown(tab1, { key: " " }); // Space key
+    });
     expect(tab1).toHaveAttribute("aria-selected", "true");
   });
 });
