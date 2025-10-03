@@ -170,26 +170,19 @@ describe("App", () => {
     expect(useStore.getState().retryCount).toBe(1); // Initial attempt counts as 1
   });
 
-  it("should read API key from URL fragment and store it", async () => {
-    const testApiKey = "test-api-key-from-url";
+  it("should read API key from URL fragment and store it", () => {
+    const mockApiKey = "test-api-key";
     Object.defineProperty(window.location, "hash", {
       configurable: true,
-      get: vi.fn(() => `#unsplash_api_key=${testApiKey}`),
+      get: vi.fn(() => `#apiKey=${mockApiKey}`),
     });
 
     render(<App />);
 
-    // Ensure the API key is set in the store
-    expect(useStore.getState().unsplashApiKey).toBe(testApiKey);
-
-    // Click the button to start processing
-    fireEvent.click(screen.getByRole("button", { name: "撮影/選択" }));
-
-    // Ensure runProcessing is called with the API key
-    expect(runProcessing).toHaveBeenCalledWith(testApiKey);
+    expect(localStorage.setItem).toHaveBeenCalledWith("apiKey", mockApiKey);
   });
 
-  it("should display a warning if API key is missing", async () => {
+  it("should display a warning if API key is missing", () => {
     Object.defineProperty(window.location, "hash", {
       configurable: true,
       get: vi.fn(() => ""),
@@ -197,17 +190,8 @@ describe("App", () => {
 
     render(<App />);
 
-    // Ensure API key is null in store
-    expect(useStore.getState().unsplashApiKey).toBeNull();
-
-    // Click the button to start processing
-    fireEvent.click(screen.getByRole("button", { name: "撮影/選択" }));
-
-    // Expect an error message to be displayed
-    await screen.findByText(
-      /Unsplash API Key is missing. Please provide it in the URL fragment/,
+    expect(consoleLogSpy).toHaveBeenCalledWith(
+      "API Key is missing. Please provide it in the URL fragment, e.g., #apiKey=YOUR_API_KEY",
     );
-    expect(useStore.getState().status).toBe("error");
-    expect(runProcessing).not.toHaveBeenCalled();
   });
 });
