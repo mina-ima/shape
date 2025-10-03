@@ -49,7 +49,7 @@ UI：ワンタップ起動→自動処理→雲アニメのローディング→
    失敗時
    権限拒否 → ギャラリー選択に自動フォールバック
    HEICなど非対応 → createImageBitmap + Canvas再エンコード
-   3.2 自動切り抜き（前景抽出）
+   3.2 自動切り抜き（前景抽出） [DONE]
    モデル候補
    ONNX Runtime Web で U²-Net（salient object detection） or MobileSAM派生の軽量SOD
    実装容易・自然物向け・1枚物体に強い
