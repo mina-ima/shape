@@ -97,13 +97,13 @@ export default defineConfig({
     globals: true,
     setupFiles: "./src/test/setup.ts",
     include: ["src/**/*.test.{ts,tsx}"],
-    exclude: ["src/ui/Tabs.test.tsx"],
-    browser: {
-      enabled: true,
-      name: "chromium",
-      provider: "playwright",
-      ignoreHTTPSErrors: true,
-    },
+    environment: "jsdom",
+    // browser: {
+    //   enabled: true,
+    //   provider: "playwright",
+    //   ignoreHTTPSErrors: true,
+    //   instances: [{ browser: "chromium" }],
+    // },
     alias: {
       "@testing-library/user-event":
         "@testing-library/user-event/dist/index.mjs",
