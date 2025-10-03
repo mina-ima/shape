@@ -156,7 +156,7 @@ UI：ワンタップ起動→自動処理→雲アニメのローディング→
    main.tsx
    /public
    /models/u2net.onnx
-   /assets/fallback_bg/*
+   /assets/fallback_bg/\*
    8.3 型・API（抜粋：TypeScript）
    // 入出力
    export type RGBAImage = { width: number; height: number; data: Uint8ClampedArray };
@@ -191,7 +191,7 @@ encode(frames: AsyncGenerator<VideoFrame>, fps: number): Promise<Blob>;
 雲ローディング
 Canvas procedural：ノイズフィールド（Simplex）で雲が中心に集まる頂点フィールドアニメ。
 8.4 PWA/キャッシュ
-precache：u2net.onnx, wasm/*.wasm, UI静的資産
+precache：u2net.onnx, wasm/\*.wasm, UI静的資産
 runtime：候補サムネは StaleWhileRevalidate（帯域節約）
 オフライン：素材API不可時は /assets/fallback_bg よりランダム選択
 8.5 ライセンス/表記
@@ -223,7 +223,7 @@ performance.mark で各段階を計測、しきい値をCIに記録
 メモリ使用量ピーク < 300MB（720p時）10. エッジケース指針
 前景が極小/空一色：**閾値で「前景なし」**と判定→単層ズームに切替
 類似スコアが僅差：色相マッチ（平均色差ΔE）でタイブレーク
-透明領域多すぎ：inpaint風拡張を強く（ぼかし半径↑）11. ログ/テレメトリ（端末内）
+透明領域多すぎ：inpaint風拡張を強く（ぼかし半径↑）11. ログ/テレメトリ（端末内） [DONE]
 収集：処理時間、失敗理由、機能フラグ（オンデバイスのみ）
 既定は保存しない、ユーザーが明示ON時のみlocalStorageに保存・閲覧・消去可能12. 実装タスク（順序）
 プロジェクト雛形（Vite + TS + PWA + Zustand）
