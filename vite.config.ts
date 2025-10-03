@@ -83,21 +83,30 @@ export default defineConfig({
     }),
   ],
   optimizeDeps: {
-    include: ["onnxruntime-web"],
+    exclude: ["onnxruntime-web"],
   },
   server: {
+    headers: {
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Cross-Origin-Embedder-Policy": "require-corp",
+    },
     // Enable HTTPS for development server
     // https: true,
   },
   test: {
     globals: true,
     setupFiles: "./src/test/setup.ts",
-    include: ["src/**/*.test.{ts,tsx}", "src/ui/Tabs.test.tsx"],
+    include: ["src/**/*.test.{ts,tsx}"],
+    exclude: ["src/ui/Tabs.test.tsx"],
     browser: {
       enabled: true,
       name: "chromium",
       provider: "playwright",
       ignoreHTTPSErrors: true,
+    },
+    alias: {
+      "@testing-library/user-event":
+        "@testing-library/user-event/dist/index.mjs",
     },
   },
   resolve: {

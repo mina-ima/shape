@@ -1,86 +1,54 @@
-import React, { useState, useRef, useEffect, KeyboardEvent } from "react";
+import React, { useState } from "react";
 
-interface TabItem {
-  id: string;
-  label: string;
-  content: React.ReactNode;
+interface TabPanelProps {
+  title: string;
+  children: React.ReactNode;
 }
 
 interface TabsProps {
-  items: TabItem[];
+  children: React.ReactElement<TabPanelProps>[];
 }
 
-const Tabs: React.FC<TabsProps> = ({ items }) => {
-  const [activeTab, setActiveTab] = useState(items[0]?.id);
-  const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
-
-  useEffect(() => {
-    tabRefs.current = tabRefs.current.slice(0, items.length);
-  }, [items]);
-
-  const handleKeyDown = (
-    event: KeyboardEvent<HTMLButtonElement>,
-    index: number,
-  ) => {
-    switch (event.key) {
-      case "ArrowRight":
-        event.preventDefault();
-        focusTab((index + 1) % items.length);
-        break;
-      case "ArrowLeft":
-        event.preventDefault();
-        focusTab((index - 1 + items.length) % items.length);
-        break;
-      case "Home":
-        event.preventDefault();
-        focusTab(0);
-        break;
-      case "End":
-        event.preventDefault();
-        focusTab(items.length - 1);
-        break;
-      default:
-        break;
-    }
-  };
-
-  const focusTab = (index: number) => {
-    tabRefs.current[index]?.focus();
-    setActiveTab(items[index].id);
-  };
+const Tabs: React.FC<TabsProps> = ({ children }) => {
+  const [activeTab, setActiveTab] = useState(0);
 
   return (
     <div>
-      <div role="tablist" aria-label="Tab navigation">
-        {items.map((item, index) => (
+      <div role="tablist">
+        {children.map((child, index) => (
           <button
-            key={item.id}
-            id={item.id}
+            key={index}
             role="tab"
-            aria-selected={activeTab === item.id}
-            aria-controls={`${item.id}-panel`}
-            tabIndex={activeTab === item.id ? 0 : -1}
-            onClick={() => setActiveTab(item.id)}
-            onKeyDown={(e) => handleKeyDown(e, index)}
-            ref={(el) => {
-              tabRefs.current[index] = el;
+            aria-selected={index === activeTab}
+            onClick={() => setActiveTab(index)}
+            onKeyDown={(event) => {
+              if (event.key === "ArrowRight") {
+                setActiveTab(
+                  (prevActiveTab) => (prevActiveTab + 1) % children.length,
+                );
+              } else if (event.key === "ArrowLeft") {
+                setActiveTab(
+                  (prevActiveTab) =>
+                    (prevActiveTab - 1 + children.length) % children.length,
+                );
+              } else if (event.key === "Home") {
+                setActiveTab(0);
+              } else if (event.key === "End") {
+                setActiveTab(children.length - 1);
+              }
             }}
           >
-            {item.label}
+            {child.props.title}
           </button>
         ))}
       </div>
-      {items.map((item) => (
-        <div
-          key={`${item.id}-panel`}
-          id={`${item.id}-panel`}
-          role="tabpanel"
-          aria-labelledby={item.id}
-          hidden={activeTab !== item.id}
-        >
-          {item.content}
-        </div>
-      ))}
+      <div>
+        {children.map((child, index) => (
+          <div key={index} role="tabpanel" hidden={index !== activeTab}>
+            {child.props.children}
+          </div>
+        ))}
+      </div>
     </div>
   );
 };
