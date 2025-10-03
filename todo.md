@@ -100,9 +100,9 @@
 
 ## 8. UI/UX（ミニマル）
 
-- [x] 1画面目：中央に「撮影/選択」ボタン（1タップ完結）。
+- [x] 1画面目：中央に「撮影/選択」ボタン（ワンタップ完結）。
   - **Verify**: 余計な選択肢なし。
-- [x] ローディング：雲が集まるアニメ（Canvas/Lottie）。`prefers-reduced-motion` 対応。
+- [x] ローディング：雲が集まるアニメ（Lottie/Canvas procedural）。`prefers-reduced-motion` 対応。
   - **Verify**: 低モーション環境で静的代替表示。
 - [x] プレビュー：自動再生 + 「保存」ボタンのみ。
   - **Verify**: 意図しないタップ領域がない（ヒットボックス >= 44px）。
@@ -127,7 +127,7 @@
 - [ ] セグメンテーション1枚 < **300ms**（中位端末）。 (Note: Not met due to WebGL unavailability and WASM performance limitations in current environment.)
 - [ ] 類似スコアリング32枚 < **400ms**（WebWorker並列）。
 - [ ] 5s@720p のエンコード：WebCodecs < **2s** / ffmpeg < **15s**。
-- [ ] 初期バンドル < **250KB**、遅延合計 < **12MB**（モデル/ffmpeg除く）。
+- [ ] 初期バンドル < **250KB**、遅延ロード合計 < **12MB**（モデル/ffmpeg除く）。
   - **Verify**: `performance.mark` で各工程を計測し CI に閾値保存。
 
 ## 11. セキュリティ / プライバシー
@@ -158,7 +158,7 @@
 - [x] `segmentation`：基準画像で IoU しきい値を確認（擬似）。
 - [x] `similarity`：合成図形で期待順位を満たす。
 - [x] `composer`：フレーム数・α合成の境界値試験。
-- [x] `encode`：フォールバック分岐網羅。
+- [x] `encode`：フォールバック切替の分岐網羅。
   - **Verify**: `pnpm test` 緑。カバレッジしきい値設定。
 
 ### 14.2 結合
