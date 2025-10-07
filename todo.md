@@ -171,6 +171,24 @@
 - [ ] API 500 → ローカル背景で動画生成完了。
 - [ ] PWAオフラインで再実行（素材はローカル代替）。
 
+### 14.4 テストの失敗を修正し、デバッグ履歴を記録する。
+
+- [ ] `src/App.test.tsx`: `TypeError: Cannot redefine property: hash` の修正
+- [ ] `src/integration.test.ts`: `TypeError: Cannot convert undefined or null to object` の修正
+- [ ] `src/core/store.test.ts`: `TypeError: [Function getItem] is not a spy or a call to a spy!` の修正
+- [ ] `src/camera/index.test.ts`: `createImageBitmap does not exist` および `Cannot read properties of undefined (reading 'mockRestore')` の修正
+- [ ] `src/segmentation/iou.test.ts`: `Error: Masks must have the same dimensions.` の修正
+- [ ] `src/segmentation/onnx.test.ts`: `TypeError: Cannot spy on export "[object Object]". Module namespace is not configurable in ESM.` および `AssertionError: expected 0 to be greater than 0` の修正
+- [ ] `src/similarity/contour.test.ts`: `AssertionError: expected NaN to be greater than or equal to 0` の修正
+- [ ] `src/similarity/ranking.test.ts`: `AssertionError: expected NaN to be greater than 0.99` の修正
+- [ ] `src/storage/save.test.ts`: `TypeError: URL.revokeObjectURL is not a function` および `AssertionError: expected "spy" to be called 2 times, but got 1 times` の修正
+- [ ] `src/ui/AttributionToast.test.tsx`: `Error: Test timed out in 5000ms.` の修正
+- [ ] `src/ui/LoadingCloud.test.tsx`: `TypeError: window.matchMedia is not a function` の修正
+- [ ] `src/ui/PreviewScreen.test.tsx`: `Error: createObjectURL does not exist` の修正
+- [ ] `src/ui/Tabs.test.tsx`: `AssertionError: expected "aria-selected" to be "true"` の修正
+- [ ] `src/compose/fill.test.ts`: `AssertionError: expected +0 to be 100` の修正
+- [ ] `src/compose/parallax.test.ts`: `AssertionError: expected +0 to be 255` の修正
+
 ### 14.4 互換/実機
 
 - [ ] iOS14 Safari（iPhone 11/12/SE3）で保存成功（MP4）。

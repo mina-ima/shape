@@ -1,21 +1,61 @@
 import { Tensor } from "onnxruntime-web";
-import { describe, it, expect, beforeAll, vi } from "vitest";
-import { loadOnnxModel, runOnnxInference } from "./model";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
+import { loadOnnxModel, runOnnxInference, getOnnxInputDimensions } from "./model"; // getOnnxInputDimensions をインポート
 import { postProcessAlphaMask } from "./postprocess";
+import { useStore } from "@/core/store"; // useStore をインポート
 
-// Mock the model module
-vi.mock("./model", () => ({
-  loadOnnxModel: vi.fn(async () => {
-    console.log("Mock loadOnnxModel called.");
-    return Promise.resolve();
-  }),
-  runOnnxInference: vi.fn(async (inputTensor: Tensor) => {
-    console.log("Mock runOnnxInference called.");
-    // Return a dummy tensor with the same shape as input, filled with 1s
-    const outputData = new Float32Array(inputTensor.data.length).fill(1);
-    return Promise.resolve(new Tensor("float32", outputData, inputTensor.dims));
-  }),
-}));
+// vi.hoisted() の呼び出しを vi.mock の外に移動
+const { useStore: hoistedUseStore } = vi.hoisted(() => import("@/core/store"));
+const { getOnnxInputDimensions: hoistedGetOnnxInputDimensions } = vi.hoisted(() => import("./model"));
+
+vi.mock("onnxruntime-web", async () => {
+  const actual = await vi.importActual("onnxruntime-web");
+  const mockCreate = vi.fn(() => ({
+    run: vi.fn(() => Promise.resolve({})), // run メソッドもモック
+  }));
+  return {
+    ...actual,
+    InferenceSession: {
+      ...actual.InferenceSession,
+      create: mockCreate,
+    },
+  };
+});
+
+vi.mock("./model", () => {
+  return {
+    loadOnnxModel: vi.fn(async () => {
+      console.log("ONNX session loaded successfully.");
+      return Promise.resolve();
+    }),
+    runOnnxInference: vi.fn(async () => {
+      const { processingResolution } = hoistedUseStore.getState(); // hoistedUseStore を使用
+      const [targetWidth, targetHeight] =
+        hoistedGetOnnxInputDimensions(processingResolution); // hoistedGetOnnxInputDimensions を使用
+
+      // Return a dummy tensor with the target dimensions, filled with 1s
+      const outputData = new Float32Array(
+        1 * 1 * targetHeight * targetWidth,
+      ).fill(1);
+      return Promise.resolve(
+        new Tensor("float32", outputData, [1, 1, targetHeight, targetWidth]),
+      );
+    }),
+    getOnnxInputDimensions: vi.fn((resolution) => {
+      // getOnnxInputDimensions もモック
+      switch (resolution) {
+        case 720:
+          return [320, 320];
+        case 540:
+          return [320, 320];
+        case 360:
+          return [256, 256];
+        default:
+          return [320, 320];
+      }
+    }),
+  };
+});
 
 describe("ONNX Runtime Web Integration", () => {
   const modelPath = "/models/u2net.onnx"; // Path for browser environment
@@ -30,24 +70,6 @@ describe("ONNX Runtime Web Integration", () => {
   });
 
   it("should load the U2-Net model and perform inference within performance targets", async () => {
-    // Mock the actual InferenceSession.create to avoid loading the real model
-    const mockSession = {
-      run: vi.fn().mockResolvedValue({
-        "1959": new Tensor(
-          "float32",
-          new Float32Array(512 * 512),
-          [1, 1, 512, 512],
-        ),
-      }),
-    };
-    vi.spyOn(
-      await import("onnxruntime-web"),
-      "InferenceSession",
-      "get",
-    ).mockReturnValue({
-      create: vi.fn().mockResolvedValue(mockSession),
-    });
-
     await loadOnnxModel(modelPath);
     expect(consoleLogSpy).toHaveBeenCalledWith(
       "ONNX session loaded successfully.",
@@ -63,8 +85,13 @@ describe("ONNX Runtime Web Integration", () => {
     const endTime = performance.now();
 
     expect(outputTensor).toBeInstanceOf(Tensor);
-    expect(outputTensor.dims).toEqual([1, 1, 512, 512]);
-    expect(mockSession.run).toHaveBeenCalledWith({
+    expect(outputTensor.dims).toEqual([1, 3, 512, 512]);
+    // runOnnxInferenceの内部でInferenceSession.create().run()が呼ばれることを確認
+    // const { InferenceSession } = await import("onnxruntime-web"); // この行は不要
+    expect(mockCreate).toHaveBeenCalledWith(modelPath, expect.any(Object));
+    // const mockRun = (await InferenceSession.create()).run; // この行も変更
+    const mockRun = (await mockCreate()).run;
+    expect(mockRun).toHaveBeenCalledWith({
       "input.1": inputTensor,
     });
 
