@@ -24,25 +24,26 @@ describe("Background Expansion and Blurring", () => {
     const originalBg = new cv.Mat(height, width, cv.CV_8UC3);
     originalBg.data.set(bgImageData);
 
-    const expandedBg = expandAndBlurBackground(cv, originalBg, 1.2, 15); // Expand by 20%, blur with 15px kernel
+    const blurredBg = expandAndBlurBackground(cv, originalBg, 1.2, 15); // Expand by 20%, blur with 15px kernel
 
     // Expect the expanded background to be larger
-    expect(expandedBg.cols).toBeGreaterThan(width);
-    expect(expandedBg.rows).toBeGreaterThan(height);
+    expect(blurredBg.cols).toBeGreaterThan(width);
+    expect(blurredBg.rows).toBeGreaterThan(height);
 
     // Expect some blurring to have occurred (e.g., pixel values near edges should be different from original)
     // This is a very basic check and might need refinement for more robust testing
     const originalCenterPixel =
-      originalBg.data[((height / 2) * width + width / 2) * 3];
-    const expandedCenterPixel =
-      expandedBg.data[
-        ((expandedBg.rows / 2) * expandedBg.cols + expandedBg.cols / 2) * 3
+      originalBg.data[Math.floor((height / 2) * width + width / 2) * 3];
+    const blurredCenterPixel =
+      blurredBg.data[
+        Math.floor((blurredBg.rows / 2) * blurredBg.cols + blurredBg.cols / 2) *
+          3
       ];
     // For a solid color, the center should remain the same after blurring, but edges will change.
     // A more complex test would involve checking gradients or specific blurred patterns.
-    expect(expandedCenterPixel).toBe(originalCenterPixel); // Center should remain same for solid color
+    expect(blurredCenterPixel).toBeCloseTo(originalCenterPixel, 1); // Center should remain same for solid color
 
     originalBg.delete();
-    expandedBg.delete();
+    blurredBg.delete();
   });
 });

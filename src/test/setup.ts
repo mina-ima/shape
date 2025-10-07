@@ -1,119 +1,148 @@
-import { vi } from "vitest";
 import "@testing-library/jest-dom/vitest";
+import { vi } from "vitest";
 
-if (typeof global.ImageData === "undefined") {
-  global.ImageData = class ImageData {
-    width: number;
-    height: number;
-    data: Uint8ClampedArray;
+// Mocking @techstark/opencv-js globally
+vi.mock("@techstark/opencv-js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@techstark/opencv-js")>();
 
-    constructor(width: number, height: number) {
-      this.width = width;
-      this.height = height;
-      this.data = new Uint8ClampedArray(width * height * 4);
-    }
-  } as typeof ImageData;
-}
+  // Helper to create a mock Mat object
+  const createMockMat = (rows: number, cols: number, type: number, data?: Uint8Array) => {
+    const channels = (type === actual.CV_8UC4) ? 4 : (type === actual.CV_8UC3 ? 3 : 1);
+    const size = rows * cols * channels;
+    const internalData = data ? new Uint8Array(data) : new Uint8Array(size).fill(0);
 
-if (typeof global.Worker === "undefined") {
-  global.Worker = class Worker {
-    constructor(_stringUrl: string | URL, _options?: WorkerOptions) {}
-    postMessage(
-      _message: unknown,
-      _transfer?: Transferable[] | StructuredSerializeOptions,
-    ): void {}
-    terminate(): void {}
-    addEventListener(
-      _type: string,
-      _listener: EventListenerOrEventListenerObject,
-      _options?: boolean | AddEventListenerOptions,
-    ): void {}
-    removeEventListener(
-      _type: string,
-      _listener: EventListenerOrEventListenerObject,
-      _options?: boolean | EventListenerOptions,
-    ): void {}
-    onmessage: ((this: Worker, ev: MessageEvent) => unknown) | null = null;
-    onmessageerror: ((this: Worker, ev: MessageEvent) => unknown) | null = null;
-    onerror: ((this: AbstractWorker, ev: ErrorEvent) => unknown) | null = null;
-    dispatchEvent(_event: Event): boolean {
-      return false;
-    }
-  } as typeof Worker;
-}
-
-vi.mock("@techstark/opencv-js", () => {
-  console.log("Mocking @techstark/opencv-js globally");
-
-  const mockMat = () => ({
-    delete: vi.fn(),
-    data: new Uint8Array(100 * 100 * 4),
-    data32S: new Int32Array(128 * 2),
-    data64F: new Float64Array(7),
-    rows: 100,
-    cols: 100,
-    set: vi.fn(),
-    channels: () => 4,
-    copyTo: vi.fn(),
-    setTo: vi.fn(),
-    type: () => 24, // CV_8UC4
-    convertTo: vi.fn(),
-  });
-
-  const mockCv = {
-    matFromImageData: vi.fn((imageData: ImageData) => {
-      const mat = mockMat();
-      mat.rows = imageData.height;
-      mat.cols = imageData.width;
-      return mat;
-    }),
-    matFromArray: vi.fn((_rows, _cols, _type, _data) => mockMat()),
-    cvtColor: vi.fn(),
-    Canny: vi.fn(),
-    Mat: Object.assign(vi.fn(mockMat), { ones: vi.fn(mockMat) }),
-    MatVector: vi.fn(() => ({
-      size: vi.fn(() => 1),
-      get: vi.fn(() => mockMat()),
+    const mat = {
+      data: internalData,
+      rows: rows,
+      cols: cols,
+      channels: channels,
+      type: vi.fn(() => type),
+      ptr: vi.fn(function (r, c) {
+        const index = (r * this.cols + c) * this.channels;
+        return this.data.subarray(index, index + this.channels);
+      }),
+      setTo: vi.fn(function (scalar) {
+        for (let i = 0; i < this.data.length; i += this.channels) {
+          this.data[i] = scalar.w[0];
+          this.data[i + 1] = scalar.w[1];
+          this.data[i + 2] = scalar.w[2];
+          this.data[i + 3] = scalar.w[3];
+        }
+      }),
       delete: vi.fn(),
-      push_back: vi.fn(),
-    })),
-    Point: vi.fn((x, y) => ({ x, y })),
-    Size: vi.fn((width, height) => ({ width, height })),
-    Scalar: vi.fn((v0, v1, v2, v3) => [v0, v1, v2, v3]),
-    rectangle: vi.fn(),
-    findContours: vi.fn(),
-    contourArea: vi.fn(() => 100),
-    arcLength: vi.fn(() => 400),
-    moments: vi.fn(() => ({ m00: 100, m10: 5000, m01: 5000 })),
-    HuMoments: vi.fn((_moments, huMomentsMat) => {
-      huMomentsMat.rows = 7;
-      const mockHu = [1, 2, 3, 4, 5, 6, 7];
-      mockHu.forEach((v, i) => (huMomentsMat.data64F[i] = v));
-    }),
-    morphologyEx: vi.fn(),
-    split: vi.fn(),
-    resize: vi.fn(),
-    addWeighted: vi.fn(),
-    bitwise_and: vi.fn(),
-    merge: vi.fn(),
-    dilate: vi.fn(),
-    warpAffine: vi.fn(),
-    GaussianBlur: vi.fn(),
-    MORPH_OPEN: 2,
-    RETR_EXTERNAL: 0,
-    CHAIN_APPROX_SIMPLE: 0,
-    COLOR_RGBA2GRAY: 0,
-    CV_8U: 0,
-    CV_8UC1: 0,
-    CV_8UC3: 16,
-    CV_8UC4: 24,
-    CV_32F: 5,
-    CV_32FC2: 13,
-    CV_32SC2: 12,
+      copyTo: vi.fn(function (dst) {
+        dst.rows = this.rows;
+        dst.cols = this.cols;
+        dst.channels = this.channels;
+        dst.type = this.type;
+        dst.data = new Uint8Array(this.data);
+      }),
+      // Add other methods as needed
+    };
+    return mat;
   };
 
-  // @ts-expect-error - Mocking the default export
-  mockCv.default = mockCv;
+  return { // Promise.resolve を削除
+    __esModule: true,
+    default: {
+      ...actual, // Import and retain actual behavior for unmocked functions
+      Mat: vi.fn(function (rows, cols, type, data) {
+        return createMockMat(rows, cols, type, data);
+      }),
+      Scalar: vi.fn((r, g, b, a) => ({ w: [r, g, b, a] })),
+      GaussianBlur: vi.fn((src, dst, ksize, sigmaX, sigmaY, borderType) => {
+        for (let i = 0; i < src.data.length; i++) {
+          dst.data[i] = src.data[i];
+        }
+      }),
+      copyMakeBorder: vi.fn((src, dst, top, bottom, left, right, borderType, value) => {
+        for (let i = 0; i < src.data.length; i++) {
+          dst.data[i] = src.data[i];
+        }
+      }),
+      cvtColor: vi.fn((src, dst, code, dstCn) => {
+        if (code === actual.COLOR_RGBA2RGB) {
+          const newSize = src.rows * src.cols * 3;
+          const newData = new Uint8Array(newSize);
+          for (let i = 0; i < src.rows * src.cols; i++) {
+            newData[i * 3] = src.data[i * 4];
+            newData[i * 3 + 1] = src.data[i * 4 + 1];
+            newData[i * 3 + 2] = src.data[i * 4 + 2];
+          }
+          dst.rows = src.rows;
+          dst.cols = src.cols;
+          dst.channels = 3;
+          dst.type = vi.fn(() => actual.CV_8UC3);
+          dst.data = newData;
+        } else if (code === actual.COLOR_RGB2RGBA) {
+          const newSize = src.rows * src.cols * 4;
+          const newData = new Uint8Array(newSize);
+          for (let i = 0; i < src.rows * src.cols; i++) {
+            newData[i * 4] = src.data[i * 3];
+            newData[i * 4 + 1] = src.data[i * 4 + 1];
+            newData[i * 4 + 2] = src.data[i * 4 + 2];
+            newData[i * 4 + 3] = 255; // Opaque
+          }
+          dst.rows = src.rows;
+          dst.cols = src.cols;
+          dst.channels = 4;
+          dst.type = vi.fn(() => actual.CV_8UC4);
+          dst.data = newData;
+        }
+      }),
+      split: vi.fn((src, mv) => {
+        const channels = src.channels;
+        const totalPixels = src.rows * src.cols;
+        const planes = [];
+        for (let c = 0; c < channels; c++) {
+          const planeData = new Uint8Array(totalPixels);
+          for (let i = 0; i < totalPixels; i++) {
+            planeData[i] = src.data[i * channels + c];
+          }
+          const planeMat = createMockMat(src.rows, src.cols, actual.CV_8UC1, planeData);
+          planes.push(planeMat);
+        }
+        mv.set = vi.fn((idx, mat) => (mv[idx] = mat));
+        for (let i = 0; i < planes.length; i++) {
+          mv.set(i, planes[i]);
+        }
+        mv.get = vi.fn((idx) => mv[idx]);
+        mv.size = vi.fn(() => planes.length);
+      }),
+      merge: vi.fn((mv, dst) => {
+        const rows = mv.get(0).rows;
+        const cols = mv.get(0).cols;
+        const totalPixels = rows * cols;
+        const channels = mv.size();
 
-  return mockCv;
+        const mergedData = new Uint8Array(totalPixels * channels);
+        for (let i = 0; i < totalPixels; i++) {
+          for (let c = 0; c < channels; c++) {
+            mergedData[i * channels + c] = mv.get(c).data[i];
+          }
+        }
+        dst.rows = rows;
+        dst.cols = cols;
+        dst.channels = channels;
+        dst.type = vi.fn(() => (channels === 4 ? actual.CV_8UC4 : actual.CV_8UC3));
+        dst.data = mergedData;
+      }),
+      addWeighted: vi.fn((src1, alpha, src2, beta, gamma, dst, dtype) => {
+        for (let i = 0; i < src2.data.length; i++) {
+          dst.data[i] = src2.data[i];
+        }
+      }),
+      MatVector: vi.fn(() => {
+        const mv: any = [];
+        mv.set = vi.fn((idx, mat) => (mv[idx] = mat));
+        mv.get = vi.fn((idx) => mv[idx]);
+        mv.size = vi.fn(() => mv.length);
+        mv.delete = vi.fn();
+        return mv;
+      }),
+      Size: vi.fn((w, h) => ({ width: w, height: h })),
+    },
+  };
 });
+
+console.log("Mocking @techstark/opencv-js globally");

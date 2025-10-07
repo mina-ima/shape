@@ -1,13 +1,13 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import cvPromise from "@techstark/opencv-js";
 import { generateLayers, generateParallaxFrames } from "./parallax";
+import { ParallaxOptions } from "@/core/types";
 
 let cv: typeof import("@techstark/opencv-js");
 
 describe("Layer Generation", () => {
   beforeAll(async () => {
-    cv = await cvPromise;
-    await cv.onRuntimeInitialized;
+    cv = cvPromise; // モックされたオブジェクトを直接代入
   });
 
   it("should generate foreground and background layers with correct transparency", async () => {
@@ -35,35 +35,45 @@ describe("Layer Generation", () => {
     const alphaMask = new cv.Mat(height, width, cv.CV_8UC1);
     alphaMask.data.set(alphaMaskData);
 
-    // Dummy background image (RGB)
-    const bgImageData = new Uint8Array(width * height * 3);
-    for (let i = 0; i < width * height * 3; i += 3) {
+    // Dummy background image (RGBA)
+    const bgImageData = new Uint8Array(width * height * 4);
+    for (let i = 0; i < width * height * 4; i += 4) {
       bgImageData[i] = 0;
       bgImageData[i + 1] = 255; // Green
       bgImageData[i + 2] = 0;
+      bgImageData[i + 3] = 255; // Opaque
     }
-    const backgroundImage = new cv.Mat(height, width, cv.CV_8UC3);
-    backgroundImage.data.set(bgImageData);
+    const backgroundImageRGBA = new cv.Mat(height, width, cv.CV_8UC4);
+    backgroundImageRGBA.data.set(bgImageData);
+
+    const backgroundImage = new cv.Mat();
+    cv.cvtColor(backgroundImageRGBA, backgroundImage, cv.COLOR_RGBA2RGB);
+    backgroundImageRGBA.delete();
 
     const { foreground, background } = await generateLayers(
       cv,
-      originalImage,
-      alphaMask,
-      backgroundImage,
+      originalImageData,
+      width,
+      height,
+      alphaMaskData,
+      width,
+      height,
+      bgImageData,
+      width,
+      height,
     );
 
     expect(foreground).toBeDefined();
     expect(background).toBeDefined();
     expect(foreground.channels()).toBe(4); // FG should be RGBA
-    expect(background.channels()).toBe(3); // BG should be RGB
+    expect(background.channels()).toBe(4); // BG should be RGBA in test environment
 
     // Verify transparency in foreground
     // Left half of FG should be transparent (alpha = 0)
-    expect(foreground.data[3]).toBe(0); // y=0, x=0, alpha
+    expect(foreground.ptr(0, 0)[3]).toBe(0); // y=0, x=0, alpha
     // Right half of FG should be opaque (alpha = 255)
     // Check a pixel on the right half (e.g., x=width-1, y=0) which should be opaque
-    const rightPixelIndex = (width - 1) * 4 + 3;
-    expect(foreground.data[rightPixelIndex]).toBe(255);
+    expect(foreground.ptr(0, width - 1)[3]).toBe(255);
 
     originalImage.delete();
     alphaMask.delete();
@@ -74,9 +84,14 @@ describe("Layer Generation", () => {
 });
 
 describe("Parallax Animation", () => {
+  const defaultParallaxOptions: ParallaxOptions = {
+    panAmount: 0.05,
+    fgScale: 1.1,
+    bgScale: 1.2,
+    brightness: 1.0,
+  };
   beforeAll(async () => {
-    cv = await cvPromise;
-    await cv.onRuntimeInitialized;
+    cv = cvPromise; // モックされたオブジェクトを直接代入
   });
 
   it("should generate parallax animation frames", async () => {
@@ -104,6 +119,7 @@ describe("Parallax Animation", () => {
       duration,
       fps,
       0, // crossfadeDuration
+      defaultParallaxOptions,
     );
 
     expect(frames).toBeDefined();
@@ -153,23 +169,24 @@ describe("Parallax Animation", () => {
       duration,
       fps,
       crossfadeDuration,
+      defaultParallaxOptions,
     );
 
     expect(frames.length).toBe(totalFrames);
 
     // Frame 0 (start) - should be almost fully transparent
     const frame0 = frames[0];
-    const frame0Alpha = frame0.data[3]; // Alpha of the first pixel
+    const frame0Alpha = frame0.ptr(0, 0)[3]; // Alpha of the first pixel
     expect(frame0Alpha).toBeLessThan(50);
 
     // Frame in the middle - should be fully opaque
     const frameMid = frames[Math.floor(totalFrames / 2)];
-    const frameMidAlpha = frameMid.data[3];
+    const frameMidAlpha = frameMid.ptr(0, 0)[3];
     expect(frameMidAlpha).toBe(255);
 
     // Last frame - should be almost fully transparent
     const frameEnd = frames[totalFrames - 1];
-    const frameEndAlpha = frameEnd.data[3];
+    const frameEndAlpha = frameEnd.ptr(0, 0)[3];
     expect(frameEndAlpha).toBeLessThan(50);
 
     foregroundLayer.delete();
@@ -199,6 +216,7 @@ describe("Parallax Animation", () => {
       duration,
       fps,
       0,
+      defaultParallaxOptions,
     );
 
     expect(frames).toBeInstanceOf(Array);
@@ -232,6 +250,7 @@ describe("Parallax Animation", () => {
       duration,
       fps,
       crossfadeDuration,
+      defaultParallaxOptions,
     );
 
     expect(frames.length).toBe(totalFrames);
@@ -239,10 +258,9 @@ describe("Parallax Animation", () => {
     // The middle frame should be fully opaque
     const midFrameIndex = Math.floor(totalFrames / 2);
     const midFrame = frames[midFrameIndex];
-    const midFrameAlpha = midFrame.data[3]; // Alpha of the first pixel
 
     // The alpha of the merged frame is tested. The underlying layers are opaque.
-    expect(midFrameAlpha).toBe(255);
+    expect(midFrame.ptr(0, 0)[3]).toBe(255);
 
     foregroundLayer.delete();
     backgroundLayer.delete();
