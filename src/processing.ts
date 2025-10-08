@@ -1,70 +1,116 @@
 // src/processing.ts
-// onnxruntime-web は動的 import（バンドル軽量化）
 import type { Tensor as OrtTensor } from "onnxruntime-web"
-import { loadOnnxModel, runOnnxInference } from "./segmentation/model"
+import {
+  loadOnnxModel,
+  runOnnxInference,
+  getInputInfo,
+  resolveHWFromMeta,
+} from "./segmentation/model"
 
-// public/models に置いた ONNX の URL
-const DEFAULT_MODEL_PATH = "/models/u2net.onnx" // 実ファイル名に合わせて変更可
+const DEFAULT_MODEL_PATH = "/models/u2net.onnx" // 実ファイル名に合わせる
 
-/**
- * 入力メタデータをダンプして、モデルが要求する shape と入力名を推定する。
- * - H/W が数値ならその値を採用（例: 320）
- * - 未定義/動的の場合は 320 にフォールバック（U^2-Net 等の一般的既定）
- */
-function resolveInputFromMetadata(session: any, hardFallback: number = 320) {
-  const inputNames: string[] = session.inputNames ?? []
-  const name = inputNames[0] ?? "input"
+/** 画像を HxW(=320等) にリサイズ→RGB(0..1)→NCHW float32 へ詰め替え */
+async function imageToNCHWFloat32(
+  image: ImageBitmap | HTMLImageElement,
+  H: number,
+  W: number
+): Promise<Float32Array> {
+  // オフスクリーン描画
+  const canvas = document.createElement("canvas")
+  canvas.width = W
+  canvas.height = H
+  const ctx = canvas.getContext("2d", { willReadFrequently: true })!
+  ctx.drawImage(image as any, 0, 0, W, H)
+  const { data } = ctx.getImageData(0, 0, W, H) // RGBA 8bit
 
-  const meta = session.inputMetadata?.[name]
-  const dims: Array<number | null | undefined> = meta?.dimensions
-
-  // デバッグログ（必要ならコメントアウト可）
-  console.log("[ORT] inputNames:", inputNames)
-  console.log("[ORT] using input name:", name)
-  console.log("[ORT] input metadata:", meta)
-
-  // 既定は NCHW
-  let n = 1, c = 3, h = hardFallback, w = hardFallback
-
-  if (Array.isArray(dims) && dims.length >= 4) {
-    // N
-    if (typeof dims[0] === "number" && dims[0]! > 0) n = dims[0] as number
-    // C
-    if (typeof dims[1] === "number" && dims[1]! > 0) c = dims[1] as number
-    // H
-    if (typeof dims[2] === "number" && dims[2]! > 0) h = dims[2] as number
-    // W
-    if (typeof dims[3] === "number" && dims[3]! > 0) w = dims[3] as number
+  // NCHW: [1, 3, H, W]
+  const out = new Float32Array(1 * 3 * H * W)
+  let idx = 0
+  // data: [R,G,B,A, R,G,B,A, ...]
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const i = (y * W + x) * 4
+      const r = data[i] / 255
+      const g = data[i + 1] / 255
+      const b = data[i + 2] / 255
+      // NCHWの順（Cが先）
+      out[0 * H * W + y * W + x] = r
+      out[1 * H * W + y * W + x] = g
+      out[2 * H * W + y * W + x] = b
+      idx++
+    }
   }
-
-  // U^2-Net 系は 320×320 固定が多い：H/W が未確定（-1 等）の場合は 320 を優先
-  if (!Number.isFinite(h) || h <= 0) h = hardFallback
-  if (!Number.isFinite(w) || w <= 0) w = hardFallback
-
-  return { name, shape: [n, c, h, w] as [number, number, number, number] }
+  return out
 }
 
-export async function runProcessing(
-  _resolution: number, // 受け取るが、固定次元モデルでは使わない
+/** 出力テンソル(想定: [1,1,H,W] など) → 0..255 の ImageData(HxW) */
+function maskTensorToImageData(
+  tensor: { data: Float32Array | number[]; dims?: number[] },
+  H: number,
+  W: number
+): ImageData {
+  // last two dims を HxW とみなす（合わなければリサイズで合わせる）
+  let arr = tensor.data as Float32Array | number[]
+  // 値域を 0..1 に正規化（すでに0..1なら害なし）
+  let min = Infinity, max = -Infinity
+  for (let i = 0; i < arr.length; i++) {
+    const v = (arr as any)[i]
+    if (v < min) min = v
+    if (v > max) max = v
+  }
+  const scale = max > min ? 1 / (max - min) : 1
+  // U^2-Net 出力はシグモイド後 0..1 のことが多いが、min-max 安全化で吸収
+  const img = new ImageData(W, H)
+  // 入力サイズが同じ前提で最初の H*W を使う（違う場合は簡易スケール）
+  const need = H * W
+  const step = arr.length / need
+  for (let i = 0; i < need; i++) {
+    const v = (arr as any)[Math.floor(i * step)]
+    const norm = (v - min) * scale
+    const g = Math.max(0, Math.min(255, Math.round(norm * 255)))
+    const p = i * 4
+    img.data[p + 0] = g
+    img.data[p + 1] = g
+    img.data[p + 2] = g
+    img.data[p + 3] = 255
+  }
+  return img
+}
+
+/** 画像を与えて推論し、マスクImageData(320x320等)を返す */
+export async function runSegmentation(
+  image: ImageBitmap | HTMLImageElement,
   modelPath: string = DEFAULT_MODEL_PATH
-): Promise<void> {
-  // 1) モデルを読み込み（fetch→Uint8Array→Session 作成は model.ts 側で実施）
+): Promise<{ mask: ImageData; inputSize: { h: number; w: number }; outputName: string }> {
   const session = await loadOnnxModel(modelPath)
+  const { names, name, dims } = getInputInfo(session)
+  console.log("[ORT] inputNames:", names)
+  console.log("[ORT] using input name:", name)
+  console.log("[ORT] input metadata:", (session as any).inputMetadata?.[name])
 
-  // 2) 入力名と shape をメタデータから決定（動的/未指定なら 320 にフォールバック）
-  const { name: inputName, shape } = resolveInputFromMetadata(session, 320)
-  const [n, c, h, w] = shape
-  console.log(`[ORT] resolved input shape [N,C,H,W]=[${n},${c},${h},${w}] for "${inputName}"`)
+  // 入力サイズを決定（メタが無い場合 320 にフォールバック）
+  const { h, w } = resolveHWFromMeta(dims, 320)
+  console.log(`[ORT] resolved input size HxW=${h}x${w}`)
 
-  // 3) 入力テンソル（ダミーデータ）
-  const size = n * c * h * w
-  const data = new Float32Array(size) // 0 で埋める
+  const nchw = await imageToNCHWFloat32(image, h, w)
   const { Tensor } = await import("onnxruntime-web")
-  const inputTensor = new Tensor("float32", data, shape) as unknown as OrtTensor
+  const inputTensor = new Tensor("float32", nchw, [1, 3, h, w]) as unknown as OrtTensor
 
-  // 4) 推論（名前付きマップで確実に）
-  await runOnnxInference(session, { [inputName]: inputTensor } as any)
+  const outputs = await runOnnxInference(session, { [name]: inputTensor } as any)
 
-  // 5) 後処理は必要に応じて
+  // 最初の出力をマスクとみなす
+  const outName = session.outputNames[0]
+  const outTensor: any = outputs[outName]
+  const mask = maskTensorToImageData(outTensor, h, w)
+
   console.log("[ORT] inference finished successfully.")
+  return { mask, inputSize: { h, w }, outputName: outName }
+}
+
+/** （既存ボタン用）ダミー処理：型/配線維持のため残す */
+export async function runProcessing(_resolution: number): Promise<void> {
+  const { Tensor } = await import("onnxruntime-web")
+  const dummy = new Tensor("float32", new Float32Array(1 * 3 * 320 * 320), [1, 3, 320, 320])
+  const session = await loadOnnxModel(DEFAULT_MODEL_PATH)
+  await runOnnxInference(session, dummy)
 }

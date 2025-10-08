@@ -1,6 +1,7 @@
 // src/App.tsx
 import React, { useEffect, useCallback } from "react";
 import { useStore, MAX_RETRIES } from "./core/store";
+import SegmentationDemo from "./ui/SegmentationDemo";
 
 function parseHashParams(): Record<string, string> {
   // 例: "#unsplash_api_key=XXXX&foo=bar"
@@ -50,6 +51,8 @@ const App: React.FC = () => {
       <h1>shape</h1>
 
       <section style={{ marginBottom: 16 }}>
+      {/* 画像入力→推論→マスク表示のMVPデモ */}
+      <SegmentationDemo />
         <div>
           <strong>Unsplash API Key:</strong>{" "}
           {unsplashApiKey ? (
