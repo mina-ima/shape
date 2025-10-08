@@ -8,13 +8,38 @@ async function loadOrt() {
   return m
 }
 
-// モデル読み込み
+// 文字列URL or バイト列の両対応でモデルを読み込む
 export async function loadOnnxModel(
-  modelPath: string,
+  model: string | Uint8Array,
   options?: ort.InferenceSession.SessionOptions
 ) {
   const ortLib = await loadOrt()
-  return await ortLib.InferenceSession.create(modelPath, options ?? {})
+
+  let source: Uint8Array
+  if (typeof model === "string") {
+    // 文字列URLなら自分で fetch して確実にバイト列を渡す（HTML混入を検知）
+    const res = await fetch(model, { cache: "no-store" })
+    if (!res.ok) {
+      const head = await res.text().then(t => t.slice(0, 200)).catch(() => "")
+      throw new Error(
+        `Failed to fetch model: ${res.status} ${res.statusText} @ ${model}. ` +
+        `Preview: ${head.replace(/\s+/g, " ")}`
+      )
+    }
+    const buf = await res.arrayBuffer()
+    source = new Uint8Array(buf)
+    if (source.byteLength < 1024) {
+      // 通常のONNXは数百KB〜MB。小さすぎる場合はHTMLなどの可能性が高い
+      throw new Error(`Model content too small (${source.byteLength} bytes) at ${model}. Is the path correct?`)
+    }
+  } else {
+    source = model
+  }
+
+  return await ortLib.InferenceSession.create(source, {
+    executionProviders: ["wasm"],
+    ...(options ?? {})
+  })
 }
 
 // 推論（単一 Tensor / 入力マップの両対応）
@@ -22,7 +47,6 @@ export async function runOnnxInference(
   session: ort.InferenceSession,
   inputs: Record<string, ort.Tensor> | ort.Tensor
 ) {
-  // 単一 Tensor が来た場合は最初の入力名で包む
   const isSingleTensor = inputs && typeof (inputs as any).dims !== "undefined"
   if (isSingleTensor) {
     const name = session.inputNames?.[0] ?? "input"
