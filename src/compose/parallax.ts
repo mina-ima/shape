@@ -2,10 +2,33 @@ import cv from "@techstark/opencv-js";
 
 export async function generateLayers(
   cv: typeof import("@techstark/opencv-js"),
-  originalImage: cv.Mat,
-  alphaMask: cv.Mat,
-  backgroundImage: cv.Mat,
+  originalImageData: Uint8Array,
+  originalImageWidth: number,
+  originalImageHeight: number,
+  alphaMaskData: Uint8Array,
+  alphaMaskWidth: number,
+  alphaMaskHeight: number,
+  backgroundImageData: Uint8Array,
+  backgroundImageWidth: number,
+  backgroundImageHeight: number,
 ): Promise<{ foreground: cv.Mat; background: cv.Mat }> {
+  const originalImage = new cv.Mat(
+    originalImageHeight,
+    originalImageWidth,
+    cv.CV_8UC4,
+  );
+  originalImage.data.set(originalImageData);
+
+  const alphaMask = new cv.Mat(alphaMaskHeight, alphaMaskWidth, cv.CV_8UC1);
+  alphaMask.data.set(alphaMaskData);
+
+  const backgroundImage = new cv.Mat(
+    backgroundImageHeight,
+    backgroundImageWidth,
+    cv.CV_8UC4,
+  );
+  backgroundImage.data.set(backgroundImageData);
+
   // Convert original image to RGBA if not already
   const originalImageRGBA = new cv.Mat();
   if (originalImage.channels() === 3) {
@@ -15,11 +38,11 @@ export async function generateLayers(
   }
 
   // Ensure alphaMask is 8UC1
-  const alphaMask8UC1 = new cv.Mat();
+  const alphaMask8UC1 = new cv.Mat(alphaMask.rows, alphaMask.cols, cv.CV_8UC1);
   if (alphaMask.type() !== cv.CV_8UC1) {
     alphaMask.convertTo(alphaMask8UC1, cv.CV_8UC1, 255);
   } else {
-    alphaMask.copyTo(alphaMask8UC1);
+    alphaMask8UC1.data.set(alphaMask.data);
   }
 
   // Create foreground with alpha channel
@@ -47,12 +70,21 @@ export async function generateLayers(
 
   rgbaPlanes.delete();
 
-  // Background is simply the provided background image
+  // Background is simply the provided background image, ensure it's RGB
   const background = new cv.Mat();
-  backgroundImage.copyTo(background);
+  if (backgroundImage.channels() === 4) {
+    cv.cvtColor(backgroundImage, background, cv.COLOR_RGBA2RGB);
+  } else if (backgroundImage.channels() === 1) {
+    cv.cvtColor(backgroundImage, background, cv.COLOR_GRAY2RGB);
+  } else {
+    backgroundImage.copyTo(background);
+  }
 
-  originalImageRGBA.delete();
+  originalImage.delete();
+  alphaMask.delete();
+  backgroundImage.delete();
   alphaMask8UC1.delete();
+  originalImageRGBA.delete();
 
   return { foreground, background };
 }

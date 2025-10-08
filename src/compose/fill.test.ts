@@ -1,13 +1,16 @@
+// src/compose/fill.test.ts
 import { describe, it, expect, beforeAll } from "vitest";
 import cvPromise from "@techstark/opencv-js";
 import { expandAndBlurBackground } from "./fill";
+import cvPromise from "../../lib/cv";
 
 let cv: typeof import("@techstark/opencv-js");
 
 describe("Background Expansion and Blurring", () => {
   beforeAll(async () => {
     cv = await cvPromise;
-    await cv.onRuntimeInitialized;
+    // モック/実体どちらでも通るように初期化待ち
+    await (cv as any).onRuntimeInitialized;
   });
 
   it("should expand and blur the background image", () => {

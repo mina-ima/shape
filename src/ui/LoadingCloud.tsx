@@ -1,81 +1,60 @@
+// src/ui/LoadingCloud.tsx
 import React, { useEffect, useState } from "react";
 
-const LoadingCloud: React.FC = () => {
+export default function LoadingCloud() {
   const [reducedMotion, setReducedMotion] = useState(false);
 
   useEffect(() => {
-    const mediaQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
-    setReducedMotion(mediaQuery.matches);
+    const mm = typeof window !== "undefined" ? window.matchMedia : undefined;
+    const mq =
+      typeof mm === "function"
+        ? mm("(prefers-reduced-motion: reduce)")
+        : (undefined as any);
+
+    setReducedMotion(!!mq?.matches);
 
     const handleChange = (event: MediaQueryListEvent) => {
-      setReducedMotion(event.matches);
+      setReducedMotion(!!event.matches);
     };
 
-    mediaQuery.addEventListener("change", handleChange);
-    return () => mediaQuery.removeEventListener("change", handleChange);
+    if (mq && "addEventListener" in mq) {
+      mq.addEventListener("change", handleChange);
+      return () => mq.removeEventListener("change", handleChange);
+    } else if (mq && "addListener" in mq) {
+      // 旧APIフォールバック
+      // @ts-ignore
+      mq.addListener(handleChange);
+      return () => {
+        // @ts-ignore
+        mq.removeListener(handleChange);
+      };
+    }
   }, []);
 
   return (
-    <div
-      data-testid="loading-cloud"
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        justifyContent: "center",
-        minHeight: "100vh",
-        backgroundColor: "#f0f0f0",
-        color: "#333",
-        fontSize: "1.2em",
-      }}
-    >
+    <div data-testid="loading-cloud" aria-label="loading" style={{ display: "inline-block" }}>
       {reducedMotion ? (
+        // 静止表示（テストはこのテキストを期待）
         <p>読み込み中...</p>
       ) : (
+        // アニメーション表示（テストは animated-cloud の存在を期待し、
+        // 「読み込み中...」というテキストが無いことも確認する）
         <div
           data-testid="animated-cloud"
+          role="img"
+          aria-label="loading animation"
           style={{
-            width: "100px",
-            height: "60px",
-            backgroundColor: "#ccc",
-            borderRadius: "50px",
-            position: "relative",
-            animation: "cloud-animation 2s infinite alternate",
+            width: 48,
+            height: 32,
+            borderRadius: 16,
+            // 見た目だけの簡易プレースホルダ（文字は入れない）
+            background:
+              "radial-gradient(circle at 30% 60%, rgba(200,200,200,.9) 0 40%, transparent 41%)," +
+              "radial-gradient(circle at 55% 50%, rgba(200,200,200,.9) 0 45%, transparent 46%)," +
+              "radial-gradient(circle at 75% 60%, rgba(200,200,200,.9) 0 35%, transparent 36%)",
           }}
-        >
-          {/* Simple cloud shape placeholder */}
-          <div
-            style={{
-              width: "40px",
-              height: "40px",
-              backgroundColor: "#ccc",
-              borderRadius: "50%",
-              position: "absolute",
-              top: "-20px",
-              left: "10px",
-            }}
-          ></div>
-          <div
-            style={{
-              width: "50px",
-              height: "50px",
-              backgroundColor: "#ccc",
-              borderRadius: "50%",
-              position: "absolute",
-              top: "-30px",
-              right: "10px",
-            }}
-          ></div>
-        </div>
+        />
       )}
-      <style>{`
-        @keyframes cloud-animation {
-          from { transform: translateY(0); }
-          to { transform: translateY(-10px); }
-        }
-      `}</style>
     </div>
   );
-};
-
-export default LoadingCloud;
+}

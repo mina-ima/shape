@@ -1,60 +1,71 @@
+// src/integration.test.ts
 import { describe, it, expect, beforeAll } from "vitest";
 import cvPromise from "@techstark/opencv-js";
-import { generateParallaxFrames } from "./compose/parallax";
+import { generateParallaxFrames, generateLayers } from "./compose/parallax";
 import { encodeVideo } from "./encode/encoder";
-import { generateLayers } from "./compose/parallax";
 
 let cv: typeof import("@techstark/opencv-js");
 
 describe("Video Generation Integration Test", () => {
   beforeAll(async () => {
     cv = await cvPromise;
-    await cv.onRuntimeInitialized;
+    await (cv as any).onRuntimeInitialized;
   });
 
-  it("should process a sample image and return a valid video blob", async () => {
-    const width = 128;
-    const height = 72;
+  it(
+    "should process a sample image and return a valid video blob",
+    async () => {
+      const width = 128;
+      const height = 72;
 
-    // 1. Create dummy input data
-    const originalImage = new cv.Mat(height, width, cv.CV_8UC4, [255, 0, 0, 255]); // Red
-    const background = new cv.Mat(height, width, cv.CV_8UC3, [0, 255, 0, 255]); // Green
-    const mask = new cv.Mat(height, width, cv.CV_8UC1, [255, 255, 255, 255]); // White
-    // Make a circle in the mask
+      // 1. Create dummy input data (配列)
+      const originalImageRGBA = new Uint8Array(width * height * 4).fill(0);
+      // 赤
+      for (let i = 0; i < originalImageRGBA.length; i += 4) {
+        originalImageRGBA[i] = 255; // R
+        originalImageRGBA[i + 3] = 255; // A
+      }
 
+      const backgroundRGB = new Uint8Array(width * height * 3).fill(0);
+      // 緑
+      for (let i = 0; i < backgroundRGB.length; i += 3) {
+        backgroundRGB[i + 1] = 255; // G
+      }
 
-    // 2. Generate Layers
-    const { foreground } = await generateLayers(
-      cv,
-      originalImage,
-      mask,
-      background,
-    );
+      const maskGray = new Uint8Array(width * height).fill(255); // 白マスク
 
-    // 3. Generate Frames
-    const frames = await generateParallaxFrames(
-      cv,
-      foreground,
-      background,
-      width,
-      height,
-      1, // 1 second duration
-      30, // 30 fps
-    );
+      // 2. Generate Layers（既存API：配列 + 寸法を渡す）
+      const { foreground, background } = await generateLayers(
+        cv,
+        originalImageRGBA, width, height,
+        maskGray,            width, height,
+        backgroundRGB,       width, height,
+      );
 
-    // 4. Encode Video
-    const videoBlob = await encodeVideo(frames, 30);
+      // 3. Generate Frames
+      const frames = await generateParallaxFrames(
+        cv,
+        foreground,
+        background,
+        width,
+        height,
+        1,   // 1 second
+        30,  // 30 fps
+      );
 
-    // 5. Assertions
-    expect(videoBlob).toBeInstanceOf(Blob);
-    expect(videoBlob.size).toBeGreaterThan(0);
-    expect(["video/webm", "video/mp4"]).toContain(videoBlob.type);
+      // 4. Encode Video
+      const videoBlob = await encodeVideo(frames, 30);
 
-    // Cleanup
-    originalImage.delete();
-    background.delete();
-    mask.delete();
-    foreground.delete();
-    frames.forEach((f) => f.delete());
-  }, 30000); // Increase timeout for this integration test
+      // 5. Assertions
+      expect(videoBlob).toBeInstanceOf(Blob);
+      expect(videoBlob.size).toBeGreaterThan(0);
+      expect(["video/webm", "video/mp4"]).toContain(videoBlob.type);
+
+      // Cleanup
+      foreground.delete();
+      background.delete();
+      frames.forEach((f) => f.delete());
+    },
+    30000,
+  );
 });

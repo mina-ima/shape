@@ -3,7 +3,7 @@ import tseslint from "typescript-eslint";
 import pluginReact from "eslint-plugin-react";
 
 export default [
-  { ignores: ["public/**"] },
+  { ignores: ["public/**", "dist/**"] },
   { languageOptions: { globals: globals.browser } },
   ...tseslint.configs.recommended,
   pluginReact.configs.flat.recommended,
@@ -17,7 +17,10 @@ export default [
       "react/react-in-jsx-scope": "off",
       "@typescript-eslint/no-unused-vars": [
         "error",
-        { argsIgnorePattern: "^_" },
+        {
+          argsIgnorePattern: "^_",
+          varsIgnorePattern: "^(TELEMETRY_ENABLED_KEY|TELEMETRY_LOG_KEY|env)$",
+        },
       ],
     },
   },

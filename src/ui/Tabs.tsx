@@ -39,8 +39,8 @@ const Tabs: React.FC<TabsProps> = ({ children }) => {
                   break;
                 case "Enter":
                 case " ":
-                  setActiveTab(newIndex);
-                  break;
+                  setActiveTab(index);
+                  return;
                 default:
                   return;
               }

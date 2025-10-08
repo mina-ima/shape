@@ -1,0 +1,64 @@
+// src/storage/save.ts
+const MIME_EXT: Record<string, string> = {
+  "video/webm": ".webm",
+  "video/mp4": ".mp4",
+};
+
+export function generateFilename(mime: string) {
+  const ext = MIME_EXT[mime] ?? "";
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const name = `parallax_${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}${ext}`;
+  return name;
+}
+
+function saveWithAnchor(blob: Blob, preferredMime: string) {
+  const a = document.createElement?.("a") as HTMLAnchorElement | undefined;
+  if (!a) throw new Error("NO_ANCHOR");
+  a.download = generateFilename(preferredMime); // ← 常に preferred の拡張子
+  a.href = URL.createObjectURL(blob);
+  a.click?.();
+}
+
+async function saveWithPicker(blob: Blob, mime: string) {
+  const suggestedName = generateFilename(mime);
+  const types = [
+    { description: "Video", accept: { [mime]: [MIME_EXT[mime] ?? ""] } },
+  ];
+  const handle: any = await (window as any).showSaveFilePicker?.({
+    suggestedName,
+    types,
+  });
+  if (!handle || typeof handle.createWritable !== "function") {
+    throw new Error("NO_WRITABLE");
+  }
+  const stream = await handle.createWritable();
+  await stream.write(blob);
+  await stream.close();
+}
+
+export async function saveFile(blob: Blob, preferredMime: string) {
+  const altMime = preferredMime === "video/webm" ? "video/mp4" : "video/webm";
+
+  // Picker があるなら 1回トライ → 失敗したら代替MIMEで再トライ
+  if (typeof (window as any).showSaveFilePicker === "function") {
+    try {
+      await saveWithPicker(blob, preferredMime); // 1回目（.webm を期待）
+      return;
+    } catch (e) {
+      console.error(`Saving with ${preferredMime} failed. Retrying with ${altMime}.`, (e as Error)?.message ?? e);
+      try {
+        await saveWithPicker(blob, altMime); // 2回目（.mp4 を期待）
+        return;
+      } catch (e2) {
+        console.error(`Saving with ${altMime} also failed. Falling back to <a> download.`, (e2 as Error)?.message ?? e2);
+        // フォールバック時のファイル名は「最初に指定された preferred」の拡張子
+        saveWithAnchor(blob, preferredMime);
+        return;
+      }
+    }
+  }
+
+  // Picker がないなら最初から <a> で preferred 拡張子
+  saveWithAnchor(blob, preferredMime);
+}

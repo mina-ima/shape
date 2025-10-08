@@ -1,24 +1,38 @@
 // src/lib/opencv-loader.ts
 import type CV from "@techstark/opencv-js";
 
-// ブラウザ実機では本家をそのまま動的 import
+// 1回ロードしたら再利用するキャッシュ
+let cachedCv: (typeof CV) | null = null;
+
+/**
+ * OpenCV を動的 import し、WASM 初期化完了を待ってから返す。
+ * 2回目以降はキャッシュを返すので高速。
+ */
 export default async function loadOpenCV(): Promise<typeof CV> {
+  if (cachedCv) return cachedCv;
+
   const cv = (await import("@techstark/opencv-js")).default as unknown as typeof CV;
 
-  // 既に初期化済みならそのまま返す
-  if ((cv as any).wasmInitialized || (cv as any).onRuntimeInitialized === undefined) {
+  // すでに初期化済み、または onRuntimeInitialized を使わないビルドなら即返す
+  if ((cv as any).wasmInitialized || typeof (cv as any).onRuntimeInitialized === "undefined") {
+    cachedCv = cv;
     return cv;
   }
 
-  // onRuntimeInitialized を Promise 化
+  // 初期化完了を待つ（多重にハンドラが登録されても前の処理は維持）
   await new Promise<void>((resolve) => {
+    const prev = (cv as any).onRuntimeInitialized;
     (cv as any).onRuntimeInitialized = () => {
       (cv as any).wasmInitialized = true;
+      if (typeof prev === "function") prev();
       resolve();
     };
-    // 念のため：すでに初期化済みなら即 resolve
     if ((cv as any).wasmInitialized) resolve();
   });
 
+  cachedCv = cv;
   return cv;
 }
+
+// 好みで named import でも使えるようにエクスポート
+export { loadOpenCV };

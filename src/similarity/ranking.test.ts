@@ -1,10 +1,11 @@
+// src/similarity/ranking.test.ts
 import { describe, it, expect, beforeAll } from "vitest";
-import cvPromise from "@techstark/opencv-js";
+import cvPromise from "@/lib/cv";
 import { calculateSimilarityScore } from "./score";
 
 let cv: typeof import("@techstark/opencv-js");
 
-// Helper to create ImageData for a shape
+// 形状ごとの ImageData を作るヘルパー
 const createShapeImageData = (
   shape: "square" | "rectangle" | "circle" | "rotated-square",
   width: number,
@@ -17,7 +18,7 @@ const createShapeImageData = (
     case "square":
       cv.rectangle(mat, new cv.Point(25, 25), new cv.Point(75, 75), white, -1);
       break;
-    case "rotated-square":
+    case "rotated-square": {
       const points = [
         { x: 50, y: 10 },
         { x: 90, y: 50 },
@@ -40,6 +41,7 @@ const createShapeImageData = (
       contour.delete();
       contours.delete();
       break;
+    }
     case "rectangle":
       cv.rectangle(mat, new cv.Point(20, 40), new cv.Point(80, 60), white, -1);
       break;
@@ -65,7 +67,7 @@ const createShapeImageData = (
 describe("Similarity Ranking", () => {
   beforeAll(async () => {
     cv = await cvPromise;
-    await cv.onRuntimeInitialized;
+    await (cv as any).onRuntimeInitialized;
   });
 
   it("should rank shapes correctly based on similarity", async () => {
@@ -92,12 +94,9 @@ describe("Similarity Ranking", () => {
       ),
     };
 
-    console.log("Similarity Scores:", scores);
-
-    // A perfect match should have a score near 1.0
+    // 完全一致は 1.0 近く
     expect(scores.perfectMatch).toBeGreaterThan(0.99);
-
-    // Check the ranking
+    // ランキングの整合
     expect(scores.perfectMatch).toBeGreaterThan(scores.similar);
   });
 });

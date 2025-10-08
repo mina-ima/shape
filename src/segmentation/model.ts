@@ -1,106 +1,38 @@
-import { InferenceSession, Tensor, env } from "onnxruntime-web";
-import { generateLowPrecisionMask } from "./lowPrecision";
-import { useStore } from "@/core/store";
-import { ProcessingResolution } from "@/core/types";
+// src/segmentation/model.ts
+// onnxruntime-web を遅延読み込み（初期バンドル削減）
+import type * as ort from "onnxruntime-web"
 
-let session: InferenceSession | null = null;
-let lowPrecisionMode = false;
-
-export async function loadOnnxModel(modelPath: string): Promise<void> {
-  if (session) {
-    return; // Avoid reloading if already loaded
-  }
-  try {
-    session = await InferenceSession.create(modelPath, {
-      // Prioritize WebGL/WebGPU if available, then fall back to WASM
-      executionProviders: ["webgl", "wasm"],
-    });
-    console.log("ONNX session loaded successfully.");
-  } catch (e) {
-    console.error(
-      "Failed to load ONNX model, switching to low precision mode:",
-      e,
-    );
-    lowPrecisionMode = true;
-  }
+// 実体ロード（runtime 用）
+async function loadOrt() {
+  const m = await import("onnxruntime-web")
+  return m
 }
 
-export function getOnnxInputDimensions(
-  resolution: ProcessingResolution,
-): [number, number] {
-  switch (resolution) {
-    case 720:
-      return [320, 320]; // U2-Net common input size for higher quality (adjusting to model's actual input)
-    case 540:
-      return [320, 320]; // U2-Net common input size for lower quality
-    case 360:
-      return [256, 256]; // Custom smaller size for very low resolution
-    default:
-      return [320, 320];
-  }
+// モデル読み込み
+export async function loadOnnxModel(
+  modelPath: string,
+  options?: ort.InferenceSession.SessionOptions
+) {
+  const ortLib = await loadOrt()
+  return await ortLib.InferenceSession.create(modelPath, options ?? {})
 }
 
-export async function runOnnxInference(inputTensor: Tensor): Promise<Tensor> {
-  const { processingResolution, setProcessingResolution } = useStore.getState();
-  const [targetWidth, targetHeight] =
-    getOnnxInputDimensions(processingResolution);
-
-  // Simulate memory/timeout error for testing purposes - DISABLED for performance testing
-  // const simulateError = Math.random() < 0.1; // 10% chance to simulate error
-
-  if (lowPrecisionMode) {
-    console.warn("Low precision mode active: Generating a placeholder mask.");
-    return generateLowPrecisionMask(targetWidth, targetHeight);
+// 推論（単一 Tensor / 入力マップの両対応）
+export async function runOnnxInference(
+  session: ort.InferenceSession,
+  inputs: Record<string, ort.Tensor> | ort.Tensor
+) {
+  // 単一 Tensor が来た場合は最初の入力名で包む
+  const isSingleTensor = inputs && typeof (inputs as any).dims !== "undefined"
+  if (isSingleTensor) {
+    const name = session.inputNames?.[0] ?? "input"
+    return await session.run({ [name]: inputs as ort.Tensor })
   }
-  if (!session) {
-    throw new Error("ONNX session not loaded. Call loadOnnxModel first.");
-  }
+  return await session.run(inputs as Record<string, ort.Tensor>)
+}
 
-  // Adjust inputTensor dimensions if necessary (this would involve image resizing before inference)
-  // For now, we'll just use the target dimensions for the output if an error occurs.
-  // In a real scenario, the inputTensor itself would need to be resized to targetWidth/targetHeight.
-  const currentInputWidth = inputTensor.dims[3];
-  const currentInputHeight = inputTensor.dims[2];
-
-  if (
-    currentInputWidth !== targetWidth ||
-    currentInputHeight !== targetHeight
-  ) {
-    console.warn(
-      `Input tensor dimensions (${currentInputWidth}x${currentInputHeight}) do not match target ONNX dimensions (${targetWidth}x${targetHeight}). This should be handled by image preprocessing.`,
-    );
-    // For now, we'll proceed with the existing inputTensor, but this is where resizing would happen.
-  }
-
-  try {
-    // if (simulateError) {
-    //   throw new Error("Simulated memory/timeout error during ONNX inference.");
-    // }
-    const feeds = { "input.1": inputTensor }; // 'input.1' is the expected input name for U2-Net
-    const results = await session.run(feeds);
-
-    // Assuming the model has a single output, we'll use the first one identified: '1959'
-    const output = results["1959"];
-    if (!output) {
-      throw new Error("ONNX inference output not found.");
-    }
-    return output as Tensor;
-  } catch (error) {
-    console.error("ONNX inference failed:", error);
-    const currentResolutionIndex = [720, 540, 360].indexOf(
-      processingResolution,
-    );
-    if (currentResolutionIndex < 2) {
-      // If not already at the lowest resolution (360p)
-      const nextResolution = ([720, 540, 360] as ProcessingResolution[])[
-        currentResolutionIndex + 1
-      ];
-      setProcessingResolution(nextResolution);
-      console.warn(
-        `Downgrading processing resolution to ${nextResolution} due to inference failure.`,
-      );
-    }
-    // Fallback to low precision mask generation if inference fails even after downgrade attempts
-    return generateLowPrecisionMask(targetWidth, targetHeight);
-  }
+// 入力次元（NCHW）: 正方入力を仮定
+export function getOnnxInputDimensions(resolution: number): [number, number, number, number] {
+  const size = Math.max(1, Math.floor(resolution))
+  return [1, 3, size, size]
 }

@@ -37,7 +37,14 @@ describe("saveFile", () => {
     // Reset mocks before each test
     vi.clearAllMocks();
     // Mock the global showSaveFilePicker
-    window.showSaveFilePicker = vi.fn().mockResolvedValue(mockFileHandle);
+    if (!window.showSaveFilePicker) {
+      window.showSaveFilePicker = vi.fn();
+    }
+    vi.spyOn(window, "showSaveFilePicker").mockResolvedValue(mockFileHandle);
+  });
+
+  afterEach(() => {
+    // showSaveFilePickerSpy は setup.ts でグローバルにモックされているため、ここでは restore 不要
   });
 
   it("should use showSaveFilePicker if available", async () => {
@@ -54,7 +61,7 @@ describe("saveFile", () => {
   });
 
   it("should fall back to <a> download if showSaveFilePicker is not available", async () => {
-    window.showSaveFilePicker = undefined;
+    (window.showSaveFilePicker as Mock).mockImplementation(() => undefined);
     const mockLink = {
       href: "",
       download: "",
@@ -76,18 +83,9 @@ describe("saveFile", () => {
   });
 
   it("should retry with alternative MIME type if saving with preferred one fails", async () => {
-    // Make the first call fail, second succeed
-    let callCount = 0;
-    (window.showSaveFilePicker as Mock).mockImplementation(async (_options) => {
-      callCount++;
-      if (callCount === 1) {
-        // 最初の呼び出しは失敗
-        throw new DOMException("Save failed", "AbortError");
-      } else {
-        // 2回目の呼び出しは成功
-        return mockFileHandle;
-      }
-    });
+    (window.showSaveFilePicker as Mock)
+      .mockRejectedValueOnce(new Error("Simulated save failure"))
+      .mockResolvedValueOnce(mockFileHandle);
 
     const blob = new Blob(["test"], { type: "video/webm" });
     await saveFile(blob, "video/webm");
@@ -112,9 +110,9 @@ describe("saveFile", () => {
 
   it("should fall back to <a> download if both MIME types fail", async () => {
     // Make both calls to showSaveFilePicker fail
-    (window.showSaveFilePicker as Mock).mockImplementation(async (_options) => {
-      throw new DOMException("Save failed", "AbortError");
-    });
+    (window.showSaveFilePicker as Mock).mockRejectedValue(
+      new Error("Simulated save failure"),
+    );
 
     const mockLink = {
       href: "",
