@@ -1,96 +1,97 @@
-import { useEffect } from "react";
+// src/App.tsx
+import React, { useEffect, useCallback } from "react";
 import { useStore, MAX_RETRIES } from "./core/store";
-import LoadingCloud from "./ui/LoadingCloud";
 
-function App() {
-   const {
-       status,
-        error,
-        processingResolution,
-        retryCount,
-        unsplashApiKey,
-        setUnsplashApiKey,
-      } = useStore();
+function parseHashParams(): Record<string, string> {
+  // 例: "#unsplash_api_key=XXXX&foo=bar"
+  const raw = window.location.hash.startsWith("#")
+    ? window.location.hash.slice(1)
+    : window.location.hash;
+  const params: Record<string, string> = {};
+  for (const part of raw.split("&")) {
+    if (!part) continue;
+    const [k, v] = part.split("=");
+    if (k) params[decodeURIComponent(k)] = v ? decodeURIComponent(v) : "";
+  }
+  return params;
+}
 
-  // Effect to read API key from URL fragment on initial load
+const App: React.FC = () => {
+  const { status, error, retryCount, processingResolution, unsplashApiKey } = useStore();
+  const setUnsplashApiKey = useStore((s) => s.setUnsplashApiKey);
+  const startProcessFlow = useStore((s) => s.startProcessFlow);
+
+  // 初回 & ハッシュ変更で unsplash_api_key を取り込む
+  const syncKeyFromHash = useCallback(() => {
+    const p = parseHashParams();
+    if (p.unsplash_api_key && p.unsplash_api_key !== unsplashApiKey) {
+      setUnsplashApiKey(p.unsplash_api_key);
+      console.log("Unsplash API key set from URL hash.");
+    }
+  }, [setUnsplashApiKey, unsplashApiKey]);
+
   useEffect(() => {
-    const fragment = window.location.hash;
-    const params = new URLSearchParams(fragment.substring(1)); // Remove #
-    const apiKey = params.get("unsplash_api_key");
+    syncKeyFromHash();
+    window.addEventListener("hashchange", syncKeyFromHash);
+    return () => window.removeEventListener("hashchange", syncKeyFromHash);
+  }, [syncKeyFromHash]);
 
-    if (apiKey) {
-      setUnsplashApiKey(apiKey);
-      // Optionally, clean the URL fragment after reading
-      // window.history.replaceState(null, "", window.location.pathname + window.location.search);
+  const handleStart = async () => {
+    if (!unsplashApiKey) {
+      alert("Unsplash API Key が未設定です。URLの #unsplash_api_key=... を確認してください。");
+      return;
     }
-  }, [setUnsplashApiKey]);
-
-  const handleInitialStart = () => {
-       // 常に最新の store 関数を呼び出す（テストの spy が確実に拾える）
-        const fn = useStore.getState().startProcessFlow;
-        fn();
+    await startProcessFlow(); // runProcessing は解像度:numberで実行されます
   };
 
-  const renderContent = () => {
-    switch (status) {
-      case "idle":
-        return (
-          <div>
-            {!unsplashApiKey && (
-              <p style={{ color: "red" }}>
-                Unsplash API Key is missing. Please provide it in the URL
-                fragment (e.g., #unsplash_api_key=YOUR_KEY) or via settings.
-              </p>
-            )}
-            <button onClick={handleInitialStart} disabled={!unsplashApiKey}>
-              撮影/選択
-            </button>
-          </div>
-        );
-      case "processing":
-        return (
-          <div>
-            <LoadingCloud />
-            <p>処理中... (解像度: {processingResolution})</p>
-            {retryCount > 0 && retryCount <= MAX_RETRIES && (
-              <p>
-                Attempt: {retryCount}/{MAX_RETRIES}
-              </p>
-            )}
-          </div>
-        );
-      case "success":
-        return (
-          <div>
-            <h2>成功!</h2>
-            <button onClick={() => useStore.getState().reset()}>もう一度</button>
-          </div>
-        );
-      case "error":
-        return (
-          <div>
-            <h2>エラー</h2>
-            <p>{error}</p>
-            <button onClick={() => useStore.getState().reset()}>リトライ</button>
-          </div>
-        );
-    }
-  };
-
+  // 簡易UI
   return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        justifyContent: "center",
-        alignItems: "center",
-        minHeight: "100vh",
-        textAlign: "center",
-      }}
-    >
-      {renderContent()}
+    <div style={{ maxWidth: 720, margin: "40px auto", fontFamily: "system-ui" }}>
+      <h1>shape</h1>
+
+      <section style={{ marginBottom: 16 }}>
+        <div>
+          <strong>Unsplash API Key:</strong>{" "}
+          {unsplashApiKey ? (
+            <span style={{ color: "green" }}>設定済み（{unsplashApiKey.slice(0, 6)}…）</span>
+          ) : (
+            <span style={{ color: "red" }}>未設定</span>
+          )}
+        </div>
+        <div>
+          <strong>Processing Resolution:</strong> {processingResolution}px
+        </div>
+        <div>
+          <strong>Status:</strong> {status}
+          {status === "error" && (
+            <span style={{ color: "red" }}> — {error ?? "unknown error"}</span>
+          )}
+          {status === "success" && (
+            <span style={{ color: "green" }}> — retryCount: {retryCount}/{MAX_RETRIES}</span>
+          )}
+        </div>
+      </section>
+
+      <button
+        onClick={handleStart}
+        disabled={!unsplashApiKey || status === "processing"}
+        style={{
+          padding: "10px 16px",
+          borderRadius: 8,
+          border: "1px solid #ccc",
+          background: !unsplashApiKey ? "#eee" : "#000",
+          color: !unsplashApiKey ? "#999" : "#fff",
+          cursor: !unsplashApiKey ? "not-allowed" : "pointer",
+        }}
+      >
+        {status === "processing" ? "処理中..." : "処理を開始"}
+      </button>
+
+      <p style={{ marginTop: 12, fontSize: 12, color: "#555" }}>
+        例：<code>http://localhost:4173/#unsplash_api_key=YOUR_KEY</code> の形式で開けば自動設定されます。
+      </p>
     </div>
   );
-}
+};
 
 export default App;

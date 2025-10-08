@@ -1,20 +1,18 @@
-// 状態管理（Zustand）: アプリの進行・解像度・APIキーなど
+// src/core/store.ts
 import { create } from "zustand"
 import { runProcessing } from "../processing"
 
-export const MAX_RETRIES = 3 // App.tsx から参照される想定の定数
+export const MAX_RETRIES = 3
 
 type Status = "idle" | "processing" | "success" | "error"
 
 type AppState = {
-  // 状態
   status: Status
   error: string | null
   retryCount: number
   processingResolution: number
   unsplashApiKey: string | null
 
-  // アクション
   setUnsplashApiKey: (key: string | null) => void
   setProcessingResolution: (res: number) => void
   reset: () => void
@@ -22,11 +20,10 @@ type AppState = {
 }
 
 export const useStore = create<AppState>((set, get) => ({
-  // 初期状態
   status: "idle",
   error: null,
   retryCount: 0,
-  processingResolution: 720, // 既定の解像度
+  processingResolution: 720,
   unsplashApiKey: null,
 
   setUnsplashApiKey: (key) => set({ unsplashApiKey: key }),
@@ -44,13 +41,12 @@ export const useStore = create<AppState>((set, get) => ({
       processingResolution: 720
     }),
 
-  // 実行フロー：解像度(number)を runProcessing に渡す
   startProcessFlow: async () => {
     const { processingResolution, retryCount } = get()
-
     set({ status: "processing", error: null })
 
     try {
+      // ★ 解像度:number を渡す（APIキーは渡さない）
       await runProcessing(processingResolution)
 
       set({
