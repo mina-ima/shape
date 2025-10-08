@@ -1,62 +1,76 @@
 // src/segmentation/model.ts
-// onnxruntime-web を遅延読み込み（初期バンドル削減）
 import type * as ort from "onnxruntime-web"
 
-// 実体ロード（runtime 用）
+let cached: {
+  url?: string
+  session?: ort.InferenceSession
+} = {}
+
 async function loadOrt() {
-  const m = await import("onnxruntime-web")
-  return m
+  return await import("onnxruntime-web")
 }
 
-// 文字列URL or バイト列の両対応でモデルを読み込む
+/** URL文字列/バイト列どちらでも読み込み可。モジュール内でセッションをキャッシュ。 */
 export async function loadOnnxModel(
   model: string | Uint8Array,
   options?: ort.InferenceSession.SessionOptions
-) {
+): Promise<ort.InferenceSession> {
   const ortLib = await loadOrt()
 
-  let source: Uint8Array
   if (typeof model === "string") {
-    // 文字列URLなら自分で fetch して確実にバイト列を渡す（HTML混入を検知）
+    if (cached.url === model && cached.session) return cached.session!
     const res = await fetch(model, { cache: "no-store" })
     if (!res.ok) {
       const head = await res.text().then(t => t.slice(0, 200)).catch(() => "")
-      throw new Error(
-        `Failed to fetch model: ${res.status} ${res.statusText} @ ${model}. ` +
-        `Preview: ${head.replace(/\s+/g, " ")}`
-      )
+      throw new Error(`Failed to fetch model: ${res.status} ${res.statusText} @ ${model}. Preview: ${head}`)
     }
     const buf = await res.arrayBuffer()
-    source = new Uint8Array(buf)
-    if (source.byteLength < 1024) {
-      // 通常のONNXは数百KB〜MB。小さすぎる場合はHTMLなどの可能性が高い
-      throw new Error(`Model content too small (${source.byteLength} bytes) at ${model}. Is the path correct?`)
-    }
+    const bytes = new Uint8Array(buf)
+    if (bytes.byteLength < 1024) throw new Error(`Model content too small at ${model}`)
+    const session = await ortLib.InferenceSession.create(bytes, {
+      executionProviders: ["wasm"],
+      ...(options ?? {}),
+    })
+    cached = { url: model, session }
+    return session
   } else {
-    source = model
+    const session = await ortLib.InferenceSession.create(model, {
+      executionProviders: ["wasm"],
+      ...(options ?? {}),
+    })
+    cached = { url: undefined, session }
+    return session
   }
-
-  return await ortLib.InferenceSession.create(source, {
-    executionProviders: ["wasm"],
-    ...(options ?? {})
-  })
 }
 
-// 推論（単一 Tensor / 入力マップの両対応）
+/** 単一テンソル or 入力マップどちらでもOK */
 export async function runOnnxInference(
   session: ort.InferenceSession,
   inputs: Record<string, ort.Tensor> | ort.Tensor
 ) {
-  const isSingleTensor = inputs && typeof (inputs as any).dims !== "undefined"
-  if (isSingleTensor) {
+  const isSingle = inputs && typeof (inputs as any).dims !== "undefined"
+  if (isSingle) {
     const name = session.inputNames?.[0] ?? "input"
     return await session.run({ [name]: inputs as ort.Tensor })
   }
   return await session.run(inputs as Record<string, ort.Tensor>)
 }
 
-// 入力次元（NCHW）: 正方入力を仮定
-export function getOnnxInputDimensions(resolution: number): [number, number, number, number] {
-  const size = Math.max(1, Math.floor(resolution))
-  return [1, 3, size, size]
+/** 入力メタをざっくり取得（無いこともある） */
+export function getInputInfo(session: ort.InferenceSession) {
+  const names = session.inputNames ?? []
+  const name = names[0] ?? "input"
+  const meta: any = (session as any).inputMetadata?.[name]
+  const dims: Array<number | null | undefined> | undefined = meta?.dimensions
+  return { names, name, dims }
+}
+
+/** 最終2次元(H,W)を取り出すユーティリティ（なければ 320x320） */
+export function resolveHWFromMeta(dims?: Array<number | null | undefined>, fallback = 320) {
+  let h = fallback, w = fallback
+  if (Array.isArray(dims) && dims.length >= 4) {
+    if (typeof dims[2] === "number" && dims[2]! > 0) h = dims[2] as number
+    if (typeof dims[3] === "number" && dims[3]! > 0) w = dims[3] as number
+  }
+  return { h, w }
 }
