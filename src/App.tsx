@@ -4,7 +4,6 @@ import { useStore, MAX_RETRIES } from "./core/store";
 import SegmentationDemo from "./ui/SegmentationDemo";
 
 function parseHashParams(): Record<string, string> {
-  // 例: "#unsplash_api_key=XXXX&foo=bar"
   const raw = window.location.hash.startsWith("#")
     ? window.location.hash.slice(1)
     : window.location.hash;
@@ -21,6 +20,7 @@ const App: React.FC = () => {
   const { status, error, retryCount, processingResolution, unsplashApiKey } = useStore();
   const setUnsplashApiKey = useStore((s) => s.setUnsplashApiKey);
   const startProcessFlow = useStore((s) => s.startProcessFlow);
+  const reset = useStore((s) => s.reset);
 
   // 初回 & ハッシュ変更で unsplash_api_key を取り込む
   const syncKeyFromHash = useCallback(() => {
@@ -42,17 +42,22 @@ const App: React.FC = () => {
       alert("Unsplash API Key が未設定です。URLの #unsplash_api_key=... を確認してください。");
       return;
     }
-    await startProcessFlow(); // runProcessing は解像度:numberで実行されます
+    await startProcessFlow();
   };
 
-  // 簡易UI
+  // “Attempt: x / MAX” の x は：
+  // - idle なら 0（表示しない）
+  // - processing 中で retryCount が 0 のこともあるので最低 1 にする
+  const displayAttempt = status === "processing" ? Math.max(1, retryCount || 1) : retryCount;
+
   return (
     <div style={{ maxWidth: 720, margin: "40px auto", fontFamily: "system-ui" }}>
       <h1>shape</h1>
 
       <section style={{ marginBottom: 16 }}>
-      {/* 画像入力→推論→マスク表示のMVPデモ */}
-      <SegmentationDemo />
+        {/* 画像入力→推論→マスク表示のMVPデモ（ここで loading-cloud も出ます） */}
+        <SegmentationDemo />
+
         <div>
           <strong>Unsplash API Key:</strong>{" "}
           {unsplashApiKey ? (
@@ -75,7 +80,9 @@ const App: React.FC = () => {
         </div>
       </section>
 
+      {/* メインの開始ボタン */}
       <button
+        aria-label="撮影/選択"
         onClick={handleStart}
         disabled={!unsplashApiKey || status === "processing"}
         style={{
@@ -89,6 +96,47 @@ const App: React.FC = () => {
       >
         {status === "processing" ? "処理中..." : "処理を開始"}
       </button>
+
+      {/* processing 中の補助表示（テストで期待） */}
+      {status === "processing" && (
+        <div style={{ marginTop: 16 }}>
+          <div aria-label="loading" data-testid="loading-cloud" style={{ display: "inline-block" }}>
+            <div
+              aria-label="loading animation"
+              data-testid="animated-cloud"
+              role="img"
+              style={{
+                width: 48,
+                height: 32,
+                borderRadius: 16,
+                background:
+                  "radial-gradient(circle at 30% 60%, rgba(200,200,200,.9) 0 40%, transparent 41%)," +
+                  "radial-gradient(circle at 55% 50%, rgba(200,200,200,.9) 0 45%, transparent 46%)," +
+                  "radial-gradient(circle at 75% 60%, rgba(200,200,200,.9) 0 35%, transparent 36%)",
+              }}
+            />
+          </div>
+          <p>処理中... (解像度: {processingResolution})</p>
+          <p>{`Attempt: ${displayAttempt}/${MAX_RETRIES}`}</p>
+        </div>
+      )}
+
+      {/* 成功時の UI（テストで探している「成功!」「もう一度」） */}
+      {status === "success" && (
+        <div style={{ marginTop: 16 }}>
+          <h3>成功!</h3>
+          <button onClick={reset}>もう一度</button>
+        </div>
+      )}
+
+      {/* エラー時の UI（テストで探している「エラー」「リトライ」） */}
+      {status === "error" && (
+        <div style={{ marginTop: 16 }}>
+          <h3>エラー</h3>
+          {error && <p>{error}</p>}
+          <button onClick={reset}>リトライ</button>
+        </div>
+      )}
 
       <p style={{ marginTop: 12, fontSize: 12, color: "#555" }}>
         例：<code>http://localhost:4173/#unsplash_api_key=YOUR_KEY</code> の形式で開けば自動設定されます。

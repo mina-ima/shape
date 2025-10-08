@@ -1,0 +1,56 @@
+// src/storage/save.ts
+const mimeToExt = (mime: string) => {
+  if (mime.includes("webm")) return ".webm";
+  if (mime.includes("mp4")) return ".mp4";
+  if (mime.includes("png")) return ".png";
+  if (mime.includes("jpeg") || mime.includes("jpg")) return ".jpg";
+  return "";
+};
+
+export function generateFilename(mime: string) {
+  const d = new Date();
+  const pad = (n: number) => n.toString().padStart(2, "0");
+  const y = d.getFullYear();
+  const M = pad(d.getMonth() + 1);
+  const D = pad(d.getDate());
+  const h = pad(d.getHours());
+  const m = pad(d.getMinutes());
+  const s = pad(d.getSeconds());
+  return `parallax_${y}${M}${D}_${h}${m}${s}${mimeToExt(mime)}`;
+}
+
+export async function saveFile(
+  blob: Blob,
+  preferredMime: string,
+  alternativeMime = preferredMime.includes("webm") ? "video/mp4" : "video/webm",
+) {
+  const trySaveWithPicker = async (mime: string) => {
+    const suggestedName = generateFilename(mime);
+    const picker = await (window as any).showSaveFilePicker?.({
+      suggestedName,
+      types: [{ description: mime, accept: { [mime]: [mimeToExt(mime)] } }],
+    });
+    const writable = await picker.createWritable();
+    await writable.write(blob);
+    await writable.close();
+  };
+
+  if (typeof (window as any).showSaveFilePicker === "function") {
+    try {
+      await trySaveWithPicker(preferredMime);
+      return;
+    } catch {
+      // リトライ（別 MIME）
+      await trySaveWithPicker(alternativeMime);
+      return;
+    }
+  }
+
+  // <a download> フォールバック
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = generateFilename(preferredMime);
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
