@@ -2,15 +2,6 @@ import { getMediaStream } from "./index";
 import * as cameraModule from "./index";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-// Mock the entire cameraModule to control selectImageFile
-vi.mock("./index", async (importOriginal) => {
-  const actual = await importOriginal();
-  return {
-    ...(actual as object),
-    selectImageFile: vi.fn(),
-  };
-});
-
 describe("camera module", () => {
   let getUserMediaSpy: vi.SpyInstance;
   let createImageBitmapSpy: vi.SpyInstance;

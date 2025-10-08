@@ -1,26 +1,16 @@
 import { useEffect } from "react";
 import { useStore, MAX_RETRIES } from "./core/store";
-import { runProcessing } from "./processing";
 import LoadingCloud from "./ui/LoadingCloud";
 
-const INITIAL_BACKOFF_DELAY = 1000; // 1 second
-
 function App() {
-  const {
-    status,
-    error,
-    processingResolution,
-    retryCount,
-    unsplashApiKey,
-    startProcessing,
-    setSuccess,
-    setError,
-    handleProcessingError,
-    incrementRetryCount,
-    logErrorToLocalStorage,
-    setUnsplashApiKey,
-    reset,
-  } = useStore();
+   const {
+       status,
+        error,
+        processingResolution,
+        retryCount,
+        unsplashApiKey,
+        setUnsplashApiKey,
+      } = useStore();
 
   // Effect to read API key from URL fragment on initial load
   useEffect(() => {
@@ -36,75 +26,10 @@ function App() {
   }, [setUnsplashApiKey]);
 
   const handleInitialStart = () => {
-    if (!unsplashApiKey) {
-      setError(
-        "Unsplash API Key is missing. Please provide it in the URL fragment (e.g., #unsplash_api_key=YOUR_KEY) or via settings.",
-      );
-      return;
-    }
-    startProcessing();
-    incrementRetryCount(); // Initial attempt counts as 1
+       // 常に最新の store 関数を呼び出す（テストの spy が確実に拾える）
+        const fn = useStore.getState().startProcessFlow;
+        fn();
   };
-
-  useEffect(() => {
-    // This effect orchestrates the processing attempts and retries.
-    const process = async () => {
-      if (retryCount > MAX_RETRIES) {
-        // Check against MAX_RETRIES from store
-        setError("Maximum retry attempts reached.");
-        logErrorToLocalStorage("Maximum retry attempts reached.");
-        return;
-      }
-
-      const delay = INITIAL_BACKOFF_DELAY * Math.pow(2, retryCount - 1); // Exponential backoff
-      console.log(
-        `Attempt ${retryCount} with resolution ${processingResolution}. Next retry in ${delay / 1000}s.`,
-      );
-
-      // Introduce exponential backoff delay before the actual processing attempt
-      if (retryCount > 1) {
-        // No delay for the very first attempt
-        await new Promise((resolve) => setTimeout(resolve, delay));
-      }
-
-      try {
-        console.log(`Processing with resolution: ${processingResolution}`);
-        // Pass the API key to runProcessing
-        if (!unsplashApiKey) {
-          setError("Unsplash API Key is missing.");
-          logErrorToLocalStorage("Unsplash API Key is missing.");
-          return;
-        }
-        await runProcessing(unsplashApiKey);
-        // If processing succeeds, update the state to 'success'.
-        setSuccess();
-      } catch (e) {
-        if (e instanceof Error) {
-          // If processing fails, this action will handle the fallback logic.
-          // It will also increment retryCount if not exhausted.
-          handleProcessingError(e.message);
-          incrementRetryCount(); // Increment for the next retry attempt
-        }
-      }
-    };
-
-    // Only run the process if the status is 'processing' and API key is available.
-    if (status === "processing" && unsplashApiKey) {
-      process();
-    }
-    // The dependencies are crucial. The effect re-runs if the status or resolution changes.
-  }, [
-    status,
-    processingResolution,
-    retryCount,
-    unsplashApiKey,
-    startProcessing,
-    setSuccess,
-    setError,
-    handleProcessingError,
-    incrementRetryCount,
-    logErrorToLocalStorage,
-  ]);
 
   const renderContent = () => {
     switch (status) {
@@ -129,7 +54,7 @@ function App() {
             <p>処理中... (解像度: {processingResolution})</p>
             {retryCount > 0 && retryCount <= MAX_RETRIES && (
               <p>
-                再試行回数: {retryCount}/{MAX_RETRIES}
+                Attempt: {retryCount}/{MAX_RETRIES}
               </p>
             )}
           </div>
@@ -138,7 +63,7 @@ function App() {
         return (
           <div>
             <h2>成功!</h2>
-            <button onClick={reset}>もう一度</button>
+            <button onClick={() => useStore.getState().reset()}>もう一度</button>
           </div>
         );
       case "error":
@@ -146,7 +71,7 @@ function App() {
           <div>
             <h2>エラー</h2>
             <p>{error}</p>
-            <button onClick={reset}>リトライ</button>
+            <button onClick={() => useStore.getState().reset()}>リトライ</button>
           </div>
         );
     }

@@ -1,13 +1,16 @@
+// src/compose/parallax.test.ts
 import { describe, it, expect, beforeAll } from "vitest";
 import cvPromise from "@techstark/opencv-js";
 import { generateLayers, generateParallaxFrames } from "./parallax";
 import { ParallaxOptions } from "@/core/types";
+import cvPromise from "../../lib/cv";
 
 let cv: typeof import("@techstark/opencv-js");
 
 describe("Layer Generation", () => {
   beforeAll(async () => {
-    cv = cvPromise; // モックされたオブジェクトを直接代入
+    cv = await cvPromise;
+    await (cv as any).onRuntimeInitialized;
   });
 
   it("should generate foreground and background layers with correct transparency", async () => {
@@ -72,7 +75,6 @@ describe("Layer Generation", () => {
     // Left half of FG should be transparent (alpha = 0)
     expect(foreground.ptr(0, 0)[3]).toBe(0); // y=0, x=0, alpha
     // Right half of FG should be opaque (alpha = 255)
-    // Check a pixel on the right half (e.g., x=width-1, y=0) which should be opaque
     expect(foreground.ptr(0, width - 1)[3]).toBe(255);
 
     originalImage.delete();
@@ -90,8 +92,10 @@ describe("Parallax Animation", () => {
     bgScale: 1.2,
     brightness: 1.0,
   };
+
   beforeAll(async () => {
-    cv = cvPromise; // モックされたオブジェクトを直接代入
+    cv = await cvPromise;
+    await (cv as any).onRuntimeInitialized;
   });
 
   it("should generate parallax animation frames", async () => {
@@ -125,18 +129,13 @@ describe("Parallax Animation", () => {
     expect(frames).toBeDefined();
     expect(frames.length).toBe(totalFrames);
 
-    // Check transformations for a few frames
-    // Frame 0 (start)
+    // Spot checks
     const frame0 = frames[0];
-    // Expect no pan/scale at the beginning for simplicity in this test
-    // A more robust test would check actual pixel data after transformation
     expect(frame0).toBeDefined();
 
-    // Frame at half duration (mid-point)
     const frameMid = frames[Math.floor(totalFrames / 2)];
     expect(frameMid).toBeDefined();
 
-    // Frame at end
     const frameEnd = frames[totalFrames - 1];
     expect(frameEnd).toBeDefined();
 
@@ -176,15 +175,15 @@ describe("Parallax Animation", () => {
 
     // Frame 0 (start) - should be almost fully transparent
     const frame0 = frames[0];
-    const frame0Alpha = frame0.ptr(0, 0)[3]; // Alpha of the first pixel
+    const frame0Alpha = frame0.ptr(0, 0)[3];
     expect(frame0Alpha).toBeLessThan(50);
 
-    // Frame in the middle - should be fully opaque
+    // Middle - fully opaque
     const frameMid = frames[Math.floor(totalFrames / 2)];
     const frameMidAlpha = frameMid.ptr(0, 0)[3];
     expect(frameMidAlpha).toBe(255);
 
-    // Last frame - should be almost fully transparent
+    // End - almost fully transparent
     const frameEnd = frames[totalFrames - 1];
     const frameEndAlpha = frameEnd.ptr(0, 0)[3];
     expect(frameEndAlpha).toBeLessThan(50);
@@ -258,8 +257,6 @@ describe("Parallax Animation", () => {
     // The middle frame should be fully opaque
     const midFrameIndex = Math.floor(totalFrames / 2);
     const midFrame = frames[midFrameIndex];
-
-    // The alpha of the merged frame is tested. The underlying layers are opaque.
     expect(midFrame.ptr(0, 0)[3]).toBe(255);
 
     foregroundLayer.delete();
@@ -267,3 +264,4 @@ describe("Parallax Animation", () => {
     frames.forEach((f) => f.delete());
   });
 });
+

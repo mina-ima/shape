@@ -1,0 +1,59 @@
+// src/segmentation/model.ts
+import * as ort from "onnxruntime-web";
+
+let session: ort.InferenceSession | undefined;
+
+/**
+ * ONNX モデルを読み込み、共有セッションを初期化します。
+ * 既に初期化済みなら同じセッションを返します。
+ */
+export async function loadOnnxModel(
+  modelPath: string,
+  options?: Partial<ort.InferenceSession.SessionOptions> & Record<string, any>
+): Promise<ort.InferenceSession> {
+  if (session) return session;
+
+  session = await ort.InferenceSession.create(modelPath, {
+    executionProviders: ["wasm"],
+    graphOptimizationLevel: "all",
+    ...(options ?? {}),
+  });
+
+  // テストがこのログを期待します
+  console.log("ONNX session loaded successfully.");
+  return session;
+}
+
+/** セッションを破棄（テストリセット用） */
+export function resetOnnxSession() {
+  session = undefined;
+}
+
+/** 内部用：必要ならロードしてセッションを返す */
+async function ensureSession(modelPath?: string): Promise<ort.InferenceSession> {
+  if (!session) {
+    if (!modelPath) {
+      throw new Error("ONNX session not loaded. Call loadOnnxModel first.");
+    }
+    await loadOnnxModel(modelPath);
+  }
+  return session!;
+}
+
+/**
+ * 推論を実行します。セッション未初期化の場合は opts.modelPath が指定されていれば自動ロードします。
+ */
+export async function runOnnxInference(
+  inputs: Record<string, ort.Tensor>,
+  opts?: { modelPath?: string }
+) {
+  const s = await ensureSession(opts?.modelPath);
+
+  const feeds: Record<string, ort.Tensor> = {};
+  for (const k of Object.keys(inputs)) {
+    feeds[k] = inputs[k];
+  }
+
+  const results = await s.run(feeds);
+  return results;
+}

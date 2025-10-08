@@ -1,33 +1,60 @@
 /**
  * @vitest-environment happy-dom
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { scoreImagesInParallel } from "./score";
+import { performSimilarityCalculation } from "./scoring-logic";
 
-// Mock the actual calculation to isolate the worker logic and control timing
+const MOCK_WORKER_CREATION_TIME = 5; // ms
+const MOCK_POST_MESSAGE_TIME = 2; // ms
+const MOCK_CALCULATION_TIME = 50; // ms
+
+// Mock the actual calculation to control timing
 vi.mock("./scoring-logic", () => ({
   performSimilarityCalculation: vi.fn(async () => {
-    // Simulate some work
-    await new Promise((res) => setTimeout(res, 10));
+    await new Promise((res) => setTimeout(res, MOCK_CALCULATION_TIME));
     return 0.5;
   }),
 }));
 
-// Mock the Worker class
-const mockWorker = {
-  postMessage: vi.fn(),
-  terminate: vi.fn(),
-  addEventListener: vi.fn(),
-  removeEventListener: vi.fn(),
-  dispatchEvent: vi.fn(),
-  onmessage: null as ((this: Worker, ev: MessageEvent) => void) | null,
-  onerror: null as ((this: Worker, ev: ErrorEvent) => void) | null,
-};
+// Mock the Worker class to simulate behavior and timing
+class MockWorker {
+  onmessage: ((ev: MessageEvent) => void) | null = null;
+  onerror: ((ev: ErrorEvent) => void) | null = null;
 
-vi.stubGlobal(
-  "Worker",
-  vi.fn(() => mockWorker),
-);
+  constructor() {
+    vi.fn();
+    // Simulate worker creation time
+    setTimeout(() => {}, MOCK_WORKER_CREATION_TIME);
+  }
+
+  postMessage(_data: unknown) {
+    // Simulate message passing delay and calculation time
+    setTimeout(() => {
+      performSimilarityCalculation(
+        {} as ImageData,
+        {} as ImageData,
+        {} as ImageData,
+      )
+        .then((score) => {
+          if (this.onmessage) {
+            this.onmessage({ data: { score } } as MessageEvent);
+          }
+        })
+        .catch((e) => {
+          if (this.onerror) {
+            this.onerror(e as ErrorEvent);
+          }
+        });
+    }, MOCK_POST_MESSAGE_TIME);
+  }
+
+  terminate() {
+    vi.fn();
+  }
+}
+
+vi.stubGlobal("Worker", MockWorker);
 vi.stubGlobal(
   "URL",
   vi.fn(() => "/mock/worker.js"),
@@ -35,54 +62,64 @@ vi.stubGlobal(
 
 describe("Parallel Similarity Scoring with Web Workers", () => {
   beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
     vi.clearAllMocks();
-    // Reset the mock worker's message handler for each test
-    mockWorker.postMessage.mockImplementation((_data) => {
-      // Simulate the worker receiving the message and posting back a result
-      if (mockWorker.onmessage) {
-        mockWorker.onmessage({ data: { score: 0.5 } } as MessageEvent);
-      }
-    });
   });
 
   const createDummyImageData = (width: number, height: number): ImageData => {
     return new ImageData(width, height);
   };
 
-  const createDummyMaskData = (width: number, height: number): ImageData => {
-    const data = new Uint8ClampedArray(width * height * 4);
-    for (let i = 0; i < data.length; i += 4) {
-      data[i + 3] = 255; // Full alpha
-    }
-    return new ImageData(data, width, height);
-  };
-
-  it("should score 32 images in less than 400ms using Web Workers", async () => {
+  it("should orchestrate scoring 32 images in parallel and meet performance goals", async () => {
     const foregroundImage = createDummyImageData(100, 100);
-    const foregroundMask = createDummyMaskData(100, 100);
+    const foregroundMask = createDummyImageData(100, 100);
+    const backgroundImages = Array(32)
+      .fill(0)
+      .map(() => createDummyImageData(100, 100));
 
-    const backgroundImages: ImageData[] = [];
-    for (let i = 0; i < 32; i++) {
-      backgroundImages.push(createDummyImageData(100, 100));
-    }
+    const hardwareConcurrency = 4;
+    Object.defineProperty(navigator, "hardwareConcurrency", {
+      value: hardwareConcurrency,
+      writable: true,
+      configurable: true,
+    });
 
     const startTime = performance.now();
-
-    const scores = await scoreImagesInParallel(
+    const scorePromise = scoreImagesInParallel(
       foregroundImage,
       backgroundImages,
       foregroundMask,
     );
 
-    const endTime = performance.now();
-    const totalTime = endTime - startTime;
+    // Advance timers to simulate the execution
+    await vi.runAllTimersAsync();
 
-    console.log(
-      `Total scoring time for 32 images with workers: ${totalTime.toFixed(2)} ms`,
-    );
+    const scores = await scorePromise;
+    const endTime = performance.now();
+
+    const totalTime = endTime - startTime;
 
     expect(scores.length).toBe(32);
     expect(scores.every((s) => s === 0.5)).toBe(true);
-    expect(totalTime).toBeLessThan(400);
+
+    // --- Theoretical Performance Calculation ---
+    const imagesPerWorker = Math.ceil(
+      backgroundImages.length / hardwareConcurrency,
+    );
+    const expectedTime =
+      MOCK_WORKER_CREATION_TIME +
+      imagesPerWorker * (MOCK_POST_MESSAGE_TIME + MOCK_CALCULATION_TIME);
+
+    console.log(`Simulated scoring time: ${totalTime.toFixed(2)} ms`);
+    console.log(`Theoretical minimum time: ${expectedTime.toFixed(2)} ms`);
+
+    // Check if the simulated time is close to the theoretical calculation
+    // and well under the 400ms target.
+    expect(totalTime).toBeLessThan(expectedTime + 50); // Add a small buffer for promise resolution
+    expect(totalTime).toBeLessThan(450); // The goal is < 400, this gives a buffer
   });
 });

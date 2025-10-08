@@ -1,0 +1,22 @@
+// Vite設定：Node/ESM前提、Reactプラグインは適宜削除可
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+
+// 実運用で base を変える場合は環境変数で上書き
+export default defineConfig({
+  plugins: [react()],
+  build: {
+    sourcemap: true, // デバッグ用。不要なら false
+    target: 'es2020',
+    outDir: 'dist',
+    emptyOutDir: true
+  },
+  server: {
+    port: 5173,
+    strictPort: true
+  },
+  preview: {
+    port: 4173,
+    strictPort: true
+  }
+})

@@ -1,99 +1,67 @@
-import { create } from "zustand";
-import { ProcessingResolution } from "./types";
+// 状態管理（Zustand）: アプリの進行・解像度・APIキーなど
+import { create } from "zustand"
+import { runProcessing } from "../processing"
 
-export type Status = "idle" | "processing" | "error" | "success";
+export const MAX_RETRIES = 3 // App.tsx から参照される想定の定数
 
-export interface AppState {
-  status: Status;
-  processingResolution: ProcessingResolution;
-  retryCount: number;
-  error: string | null;
-  unsplashApiKey: string | null;
+type Status = "idle" | "processing" | "success" | "error"
 
-  startProcessing: () => void;
-  setSuccess: () => void;
-  setError: (error: string) => void;
-  decrementResolution: () => void;
-  incrementRetryCount: () => void;
-  handleProcessingError: (error: string) => void;
-  logErrorToLocalStorage: (error: string) => void;
-  setUnsplashApiKey: (key: string) => void;
-  setProcessingResolution: (resolution: ProcessingResolution) => void;
-  reset: () => void;
+type AppState = {
+  // 状態
+  status: Status
+  error: string | null
+  retryCount: number
+  processingResolution: number
+  unsplashApiKey: string | null
+
+  // アクション
+  setUnsplashApiKey: (key: string | null) => void
+  setProcessingResolution: (res: number) => void
+  reset: () => void
+  startProcessFlow: () => Promise<void>
 }
 
-export const MAX_RETRIES = 3;
-
 export const useStore = create<AppState>((set, get) => ({
+  // 初期状態
   status: "idle",
-  processingResolution: 720,
-  retryCount: 0,
   error: null,
+  retryCount: 0,
+  processingResolution: 720, // 既定の解像度
   unsplashApiKey: null,
 
-  startProcessing: () =>
+  setUnsplashApiKey: (key) => set({ unsplashApiKey: key }),
+
+  setProcessingResolution: (res) =>
     set({
-      status: "processing",
-      error: null,
-      retryCount: 0,
+      processingResolution: Number.isFinite(res) && res > 0 ? Math.floor(res) : 720
     }),
-  setSuccess: () => set({ status: "success" }),
-  setError: (error: string) => set({ status: "error", error }),
-  decrementResolution: () => {
-    const currentResolution = get().processingResolution;
-    const nextResolution: ProcessingResolution =
-      currentResolution === 720 ? 540 : 360;
-    if (currentResolution > 360) {
-      set({ processingResolution: nextResolution });
-    }
-  },
-  incrementRetryCount: () =>
-    set((state) => ({ retryCount: state.retryCount + 1 })),
-  handleProcessingError: async (error: string) => {
-    const {
-      processingResolution,
-      retryCount,
-      decrementResolution,
-      setError,
-      logErrorToLocalStorage,
-      incrementRetryCount,
-    } = get();
 
-    incrementRetryCount();
-
-    if (retryCount < MAX_RETRIES - 1) {
-      if (processingResolution > 360) {
-        decrementResolution();
-      }
-
-      const delay = Math.pow(2, retryCount) * 1000; // Exponential delay: 1s, 2s, 4s
-      console.log(
-        `Retrying in ${delay / 1000} seconds... (Attempt: ${retryCount + 2})`,
-      );
-
-      await new Promise((resolve) => setTimeout(resolve, delay));
-
-      set({ status: "processing", error: null });
-    } else {
-      setError(error);
-      logErrorToLocalStorage(error);
-    }
-  },
-  logErrorToLocalStorage: (error: string) => {
-    const timestamp = new Date().toISOString();
-    const errorLog = JSON.parse(localStorage.getItem("errorLog") || "[]");
-    errorLog.push({ timestamp, error });
-    localStorage.setItem("errorLog", JSON.stringify(errorLog));
-  },
-  setUnsplashApiKey: (key: string) => set({ unsplashApiKey: key }),
-  setProcessingResolution: (resolution: ProcessingResolution) =>
-    set({ processingResolution: resolution }),
   reset: () =>
     set({
       status: "idle",
-      processingResolution: 720,
-      retryCount: 0,
       error: null,
-      unsplashApiKey: null,
+      retryCount: 0,
+      processingResolution: 720
     }),
-}));
+
+  // 実行フロー：解像度(number)を runProcessing に渡す
+  startProcessFlow: async () => {
+    const { processingResolution, retryCount } = get()
+
+    set({ status: "processing", error: null })
+
+    try {
+      await runProcessing(processingResolution)
+
+      set({
+        status: "success",
+        error: null,
+        retryCount: retryCount + 1
+      })
+    } catch (e) {
+      const message =
+        e instanceof Error ? e.message : typeof e === "string" ? e : "Unknown error"
+      set({ status: "error", error: message })
+    }
+  }
+}))

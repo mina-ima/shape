@@ -12,7 +12,11 @@ export function expandAndBlurBackground(
   const newWidth = Math.round(originalWidth * scaleFactor);
   const newHeight = Math.round(originalHeight * scaleFactor);
 
-  const expandedBg = new cvInstance.Mat();
+  const expandedBg = new cvInstance.Mat(
+    newHeight,
+    newWidth,
+    backgroundImage.type(),
+  );
   const dsize = new cvInstance.Size(newWidth, newHeight);
   cvInstance.resize(
     backgroundImage,
