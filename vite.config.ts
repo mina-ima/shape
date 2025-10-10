@@ -14,13 +14,13 @@ export default defineConfig({
       workbox: {
         globPatterns: ["**/*.{js,css,html,ico,png,svg,webmanifest}"],
         // 念のためサイズ上限も拡大（使われないが明示）
-        maximumFileSizeToCacheInBytes: 60 * 1024 * 1024
-      }
-    })
+        maximumFileSizeToCacheInBytes: 60 * 1024 * 1024,
+      },
+    }),
   ],
   resolve: {
     alias: {
-      "@": path.resolve(__dirname, "src")
-    }
-  }
+      "@": path.resolve(__dirname, "src"),
+    },
+  },
 });

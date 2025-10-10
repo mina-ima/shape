@@ -21,9 +21,5 @@
     ]
   },
   "include": ["src", "vite.config.ts", "index.html"],
-  "exclude": [
-    "**/*.test.*",
-    "**/__tests__/**",
-    "src/test/**"
-  ]
+  "exclude": ["**/*.test.*", "**/__tests__/**", "src/test/**"]
 }

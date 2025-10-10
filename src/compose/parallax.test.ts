@@ -264,4 +264,3 @@ describe("Parallax Animation", () => {
     frames.forEach((f) => f.delete());
   });
 });
-

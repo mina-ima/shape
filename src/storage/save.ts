@@ -71,7 +71,7 @@ async function saveWithPicker(blob: Blob, mime: string) {
 export async function saveFile(
   blob: Blob,
   _filename?: string,
-  mime: MimeType = MimeType.WebM
+  mime: MimeType = MimeType.WebM,
 ) {
   const file = new Blob([blob], { type: mime });
 

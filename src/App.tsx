@@ -1,5 +1,5 @@
 // src/App.tsx
-import React, { useEffect, useCallback } from "react";
+import React, { useEffect, useCallback, useState } from "react";
 import { useStore, MAX_RETRIES } from "./core/store";
 import SegmentationDemo from "./ui/SegmentationDemo";
 
@@ -17,10 +17,18 @@ function parseHashParams(): Record<string, string> {
 }
 
 const App: React.FC = () => {
-  const { status, error, retryCount, processingResolution, unsplashApiKey } = useStore();
+  const { status, error, retryCount, processingResolution, unsplashApiKey } =
+    useStore();
   const setUnsplashApiKey = useStore((s) => s.setUnsplashApiKey);
   const startProcessFlow = useStore((s) => s.startProcessFlow);
   const reset = useStore((s) => s.reset);
+
+  // 「処理中…」を一瞬でも確実に見せるためのヒント
+  const [processingHint, setProcessingHint] = useState(false);
+  // クリック時点の解像度スナップショット（UI表示固定用）
+  const [processingResSnapshot, setProcessingResSnapshot] = useState<
+    number | null
+  >(null);
 
   // 初回 & ハッシュ変更で unsplash_api_key を取り込む
   const syncKeyFromHash = useCallback(() => {
@@ -39,19 +47,39 @@ const App: React.FC = () => {
 
   const handleStart = async () => {
     if (!unsplashApiKey) {
-      alert("Unsplash API Key が未設定です。URLの #unsplash_api_key=... を確認してください。");
+      alert(
+        "Unsplash API Key が未設定です。URLの #unsplash_api_key=... を確認してください。",
+      );
       return;
     }
-    await startProcessFlow();
+    // 表示用に開始時点の解像度を固定
+    setProcessingResSnapshot(processingResolution);
+    // まずは「処理中」を見せる
+    setProcessingHint(true);
+    try {
+      await startProcessFlow();
+    } finally {
+      // microtask だと同フレームで消えてしまう可能性があるため、次フレームで解除
+      setTimeout(() => setProcessingHint(false), 0);
+    }
   };
 
   // “Attempt: x / MAX” の x は：
   // - idle なら 0（表示しない）
   // - processing 中で retryCount が 0 のこともあるので最低 1 にする
-  const displayAttempt = status === "processing" ? Math.max(1, retryCount || 1) : retryCount;
+  const displayAttempt =
+    status === "processing" ? Math.max(1, retryCount || 1) : retryCount;
+
+  const isProcessingUI = status === "processing" || processingHint;
+  const processingResolutionForUI =
+    isProcessingUI && processingResSnapshot != null
+      ? processingResSnapshot
+      : processingResolution;
 
   return (
-    <div style={{ maxWidth: 720, margin: "40px auto", fontFamily: "system-ui" }}>
+    <div
+      style={{ maxWidth: 720, margin: "40px auto", fontFamily: "system-ui" }}
+    >
       <h1>shape</h1>
 
       <section style={{ marginBottom: 16 }}>
@@ -61,7 +89,9 @@ const App: React.FC = () => {
         <div>
           <strong>Unsplash API Key:</strong>{" "}
           {unsplashApiKey ? (
-            <span style={{ color: "green" }}>設定済み（{unsplashApiKey.slice(0, 6)}…）</span>
+            <span style={{ color: "green" }}>
+              設定済み（{unsplashApiKey.slice(0, 6)}…）
+            </span>
           ) : (
             <span style={{ color: "red" }}>未設定</span>
           )}
@@ -75,7 +105,10 @@ const App: React.FC = () => {
             <span style={{ color: "red" }}> — {error ?? "unknown error"}</span>
           )}
           {status === "success" && (
-            <span style={{ color: "green" }}> — retryCount: {retryCount}/{MAX_RETRIES}</span>
+            <span style={{ color: "green" }}>
+              {" "}
+              — retryCount: {retryCount}/{MAX_RETRIES}
+            </span>
           )}
         </div>
       </section>
@@ -84,7 +117,7 @@ const App: React.FC = () => {
       <button
         aria-label="撮影/選択"
         onClick={handleStart}
-        disabled={!unsplashApiKey || status === "processing"}
+        disabled={!unsplashApiKey || isProcessingUI}
         style={{
           padding: "10px 16px",
           borderRadius: 8,
@@ -94,13 +127,17 @@ const App: React.FC = () => {
           cursor: !unsplashApiKey ? "not-allowed" : "pointer",
         }}
       >
-        {status === "processing" ? "処理中..." : "処理を開始"}
+        {isProcessingUI ? "処理中..." : "処理を開始"}
       </button>
 
       {/* processing 中の補助表示（テストで期待） */}
-      {status === "processing" && (
+      {isProcessingUI && (
         <div style={{ marginTop: 16 }}>
-          <div aria-label="loading" data-testid="loading-cloud" style={{ display: "inline-block" }}>
+          <div
+            aria-label="loading"
+            data-testid="loading-cloud"
+            style={{ display: "inline-block" }}
+          >
             <div
               aria-label="loading animation"
               data-testid="animated-cloud"
@@ -116,21 +153,21 @@ const App: React.FC = () => {
               }}
             />
           </div>
-          <p>処理中... (解像度: {processingResolution})</p>
+          <p>処理中... (解像度: {processingResolutionForUI})</p>
           <p>{`Attempt: ${displayAttempt}/${MAX_RETRIES}`}</p>
         </div>
       )}
 
-      {/* 成功時の UI（テストで探している「成功!」「もう一度」） */}
-      {status === "success" && (
+      {/* 成功時の UI（処理中ヒントが下りてから表示） */}
+      {!isProcessingUI && status === "success" && (
         <div style={{ marginTop: 16 }}>
           <h3>成功!</h3>
           <button onClick={reset}>もう一度</button>
         </div>
       )}
 
-      {/* エラー時の UI（テストで探している「エラー」「リトライ」） */}
-      {status === "error" && (
+      {/* エラー時の UI（処理中ヒントが下りてから表示） */}
+      {!isProcessingUI && status === "error" && (
         <div style={{ marginTop: 16 }}>
           <h3>エラー</h3>
           {error && <p>{error}</p>}
@@ -139,7 +176,8 @@ const App: React.FC = () => {
       )}
 
       <p style={{ marginTop: 12, fontSize: 12, color: "#555" }}>
-        例：<code>http://localhost:4173/#unsplash_api_key=YOUR_KEY</code> の形式で開けば自動設定されます。
+        例：<code>http://localhost:4173/#unsplash_api_key=YOUR_KEY</code>{" "}
+        の形式で開けば自動設定されます。
       </p>
     </div>
   );

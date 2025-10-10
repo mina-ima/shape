@@ -66,7 +66,10 @@ export const useStore = create<AppState>((set, get) => ({
       return 360;
     };
 
-    const attempt = async (resolution: number, attemptNo: number): Promise<void> => {
+    const attempt = async (
+      resolution: number,
+      attemptNo: number,
+    ): Promise<void> => {
       try {
         // 現在の試行番号を反映
         set({ retryCount: attemptNo, processingResolution: resolution });
@@ -81,7 +84,11 @@ export const useStore = create<AppState>((set, get) => ({
         return;
       } catch (err) {
         const message =
-          err instanceof Error ? err.message : typeof err === "string" ? err : "Unknown error";
+          err instanceof Error
+            ? err.message
+            : typeof err === "string"
+              ? err
+              : "Unknown error";
 
         if (attemptNo >= MAX_RETRIES) {
           // すべて失敗
