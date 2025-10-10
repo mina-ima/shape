@@ -3,7 +3,9 @@ import React, { useRef, useState } from "react";
 import { runSegmentation } from "@/processing";
 
 const SegmentationDemo: React.FC = () => {
-  const [info, setInfo] = useState<string>("画像を選んで「セグメント実行」を押してください。");
+  const [info, setInfo] = useState<string>(
+    "画像を選んで「セグメント実行」を押してください。",
+  );
   const [imgURL, setImgURL] = useState<string | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
@@ -35,7 +37,9 @@ const SegmentationDemo: React.FC = () => {
       cvs.height = mask.height;
       const ctx = cvs.getContext("2d")!;
       ctx.putImageData(mask, 0, 0);
-      setInfo(`完了: 入力 ${inputSize.w}x${inputSize.h}, マスク ${mask.width}x${mask.height}`);
+      setInfo(
+        `完了: 入力 ${inputSize.w}x${inputSize.h}, マスク ${mask.width}x${mask.height}`,
+      );
     } catch (e: any) {
       setInfo(`エラー: ${e?.message ?? e}`);
       console.error(e);
@@ -43,7 +47,14 @@ const SegmentationDemo: React.FC = () => {
   }
 
   return (
-    <section style={{ marginTop: 24, padding: 16, border: "1px solid #ddd", borderRadius: 8 }}>
+    <section
+      style={{
+        marginTop: 24,
+        padding: 16,
+        border: "1px solid #ddd",
+        borderRadius: 8,
+      }}
+    >
       <h2 style={{ marginTop: 0 }}>Segmentation Demo</h2>
       <p style={{ margin: "8px 0", color: "#555" }}>{info}</p>
 
@@ -51,7 +62,11 @@ const SegmentationDemo: React.FC = () => {
         <div>
           <input type="file" accept="image/*" onChange={handleFile} />
           <div style={{ marginTop: 8 }}>
-            <button onClick={handleRun} disabled={!imgURL} style={{ padding: "8px 12px", borderRadius: 6 }}>
+            <button
+              onClick={handleRun}
+              disabled={!imgURL}
+              style={{ padding: "8px 12px", borderRadius: 6 }}
+            >
               セグメント実行
             </button>
           </div>
@@ -60,14 +75,27 @@ const SegmentationDemo: React.FC = () => {
               ref={imgRef}
               src={imgURL}
               alt="input"
-              style={{ marginTop: 12, maxWidth: 300, border: "1px solid #eee", borderRadius: 6 }}
+              style={{
+                marginTop: 12,
+                maxWidth: 300,
+                border: "1px solid #eee",
+                borderRadius: 6,
+              }}
             />
           )}
         </div>
 
         <div>
           <div style={{ fontSize: 12, color: "#666" }}>出力マスク</div>
-          <canvas ref={canvasRef} style={{ display: "block", marginTop: 8, border: "1px solid #eee", borderRadius: 6 }} />
+          <canvas
+            ref={canvasRef}
+            style={{
+              display: "block",
+              marginTop: 8,
+              border: "1px solid #eee",
+              borderRadius: 6,
+            }}
+          />
         </div>
       </div>
     </section>

@@ -32,7 +32,11 @@ export default function LoadingCloud() {
   }, []);
 
   return (
-    <div data-testid="loading-cloud" aria-label="loading" style={{ display: "inline-block" }}>
+    <div
+      data-testid="loading-cloud"
+      aria-label="loading"
+      style={{ display: "inline-block" }}
+    >
       {reducedMotion ? (
         // 静止表示（テストはこのテキストを期待）
         <p>読み込み中...</p>

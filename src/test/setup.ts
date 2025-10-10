@@ -119,9 +119,11 @@ vi.mock("onnxruntime-web", () => {
     async run(_inputs: Record<string, Tensor>) {
       await new Promise((r) => setTimeout(r, 30));
       const size = 320 * 320;
-      const out = new Tensor("float32", new Float32Array(size).fill(0.5), [
-        1, 1, 320, 320,
-      ]);
+      const out = new Tensor(
+        "float32",
+        new Float32Array(size).fill(0.5),
+        [1, 1, 320, 320],
+      );
       return { output: out, out, d0: out };
     }
   }
@@ -147,7 +149,10 @@ const makeCvMock = () => {
   const INTER_LINEAR = 4;
 
   class Size {
-    constructor(public width: number, public height: number) {}
+    constructor(
+      public width: number,
+      public height: number,
+    ) {}
   }
 
   class Mat {
@@ -193,7 +198,12 @@ const makeCvMock = () => {
   }
 
   // matFromArray（2x3 などのアフィン行列想定）
-  const matFromArray = (rows: number, cols: number, type: number, arr: number[]) => {
+  const matFromArray = (
+    rows: number,
+    cols: number,
+    type: number,
+    arr: number[],
+  ) => {
     const m = new Mat(rows, cols, type);
     m.data64F = new Float64Array(arr);
     return m;
@@ -243,7 +253,7 @@ const makeCvMock = () => {
     const ch =
       typeof (src as any).channels === "function"
         ? (src as any).channels()
-        : (src as any)._ch ?? 3;
+        : ((src as any)._ch ?? 3);
 
     dst.data = new Uint8Array(dst.rows * dst.cols * ch);
     const fill = src.data[0] ?? 0;
@@ -265,7 +275,7 @@ const makeCvMock = () => {
     _bottom: number,
     _left: number,
     _right: number,
-    _borderType = BORDER_REFLECT
+    _borderType = BORDER_REFLECT,
   ) => {
     src.copyTo(dst);
   };
@@ -276,7 +286,7 @@ const makeCvMock = () => {
     src2: Mat,
     beta: number,
     _gamma: number,
-    dst: Mat
+    dst: Mat,
   ) => {
     const n = Math.min(src1.data.length, src2.data.length);
     dst.rows = src1.rows;
@@ -289,7 +299,7 @@ const makeCvMock = () => {
     (dst as any)._ch =
       typeof (src1 as any).channels === "function"
         ? (src1 as any).channels()
-        : (src1 as any)._ch ?? 3;
+        : ((src1 as any)._ch ?? 3);
     dst.channels = () => (dst as any)._ch;
   };
 
@@ -297,7 +307,7 @@ const makeCvMock = () => {
     const ch =
       typeof (src as any).channels === "function"
         ? (src as any).channels()
-        : (src as any)._ch ?? 3;
+        : ((src as any)._ch ?? 3);
     const planeSize = Math.floor(src.data.length / ch);
     for (let c = 0; c < ch; c++) {
       const m = new Mat(src.rows, src.cols, CV_8UC3);
@@ -359,7 +369,9 @@ const makeCvMock = () => {
   const HuMoments = (_m: any, out: Mat) => {
     out.rows = 7;
     out.cols = 1;
-    out.data64F = new Float64Array([1, 0.5, 0.25, 0.125, 0.0625, 0.03125, 0.015625]);
+    out.data64F = new Float64Array([
+      1, 0.5, 0.25, 0.125, 0.0625, 0.03125, 0.015625,
+    ]);
   };
 
   return {

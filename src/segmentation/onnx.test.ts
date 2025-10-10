@@ -1,12 +1,18 @@
 import { Tensor } from "onnxruntime-web";
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
-import { loadOnnxModel, runOnnxInference, getOnnxInputDimensions } from "./model"; // getOnnxInputDimensions をインポート
+import {
+  loadOnnxModel,
+  runOnnxInference,
+  getOnnxInputDimensions,
+} from "./model"; // getOnnxInputDimensions をインポート
 import { postProcessAlphaMask } from "./postprocess";
 import { useStore } from "@/core/store"; // useStore をインポート
 
 // vi.hoisted() の呼び出しを vi.mock の外に移動
 const { useStore: hoistedUseStore } = vi.hoisted(() => import("@/core/store"));
-const { getOnnxInputDimensions: hoistedGetOnnxInputDimensions } = vi.hoisted(() => import("./model"));
+const { getOnnxInputDimensions: hoistedGetOnnxInputDimensions } = vi.hoisted(
+  () => import("./model"),
+);
 
 vi.mock("onnxruntime-web", async () => {
   const actual = await vi.importActual("onnxruntime-web");

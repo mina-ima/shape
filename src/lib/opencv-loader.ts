@@ -2,7 +2,7 @@
 import type CV from "@techstark/opencv-js";
 
 // 1回ロードしたら再利用するキャッシュ
-let cachedCv: (typeof CV) | null = null;
+let cachedCv: typeof CV | null = null;
 
 /**
  * OpenCV を動的 import し、WASM 初期化完了を待ってから返す。
@@ -11,10 +11,14 @@ let cachedCv: (typeof CV) | null = null;
 export default async function loadOpenCV(): Promise<typeof CV> {
   if (cachedCv) return cachedCv;
 
-  const cv = (await import("@techstark/opencv-js")).default as unknown as typeof CV;
+  const cv = (await import("@techstark/opencv-js"))
+    .default as unknown as typeof CV;
 
   // すでに初期化済み、または onRuntimeInitialized を使わないビルドなら即返す
-  if ((cv as any).wasmInitialized || typeof (cv as any).onRuntimeInitialized === "undefined") {
+  if (
+    (cv as any).wasmInitialized ||
+    typeof (cv as any).onRuntimeInitialized === "undefined"
+  ) {
     cachedCv = cv;
     return cv;
   }
