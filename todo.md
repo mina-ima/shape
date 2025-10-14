@@ -127,7 +127,7 @@
 - [x] セグメンテーション1枚 < **300ms**（中位端末）。 (Note: Implementation uses WebGL/WASM, but performance measurement requires a real browser environment.)
 - [x] 類似スコアリング32枚 < **400ms**（WebWorker並列）。
 - [x] 5s@720p のエンコード：WebCodecs < **2s** / ffmpeg < **15s**。
-- [ ] 初期バンドル < **250KB**、遅延ロード合計 < **12MB**（モデル/ffmpeg除く）。
+- [x] 初期バンドル < **250KB**、遅延ロード合計 < **12MB**（モデル/ffmpeg除く）。
   - **Verify**: `performance.mark` で各工程を計測し CI に閾値保存。
 
 ## 11. セキュリティ / プライバシー
