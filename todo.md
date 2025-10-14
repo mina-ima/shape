@@ -143,7 +143,7 @@
 
 - [x] コントラスト AA 準拠（白背景/主色2色）。
 - [x] フォーカスリング可視、キーボード操作可能。
-- [ ] 動画・アニメは `prefers-reduced-motion` 準拠。
+- [x] 動画・アニメは `prefers-reduced-motion` 準拠。
   - **Verify**: Lighthouse/Axe で検査。
 
 ## 13. テレメトリ（端末内オプトイン）
