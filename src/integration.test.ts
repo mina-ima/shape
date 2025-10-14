@@ -1,15 +1,15 @@
 // src/integration.test.ts
 import { describe, it, expect, beforeAll } from "vitest";
-import cvPromise from "@techstark/opencv-js";
+import cv from "@techstark/opencv-js";
 import { generateParallaxFrames, generateLayers } from "./compose/parallax";
 import { encodeVideo } from "./encode/encoder";
 
-let cv: typeof import("@techstark/opencv-js");
+let cvInstance: typeof import("@techstark/opencv-js");
 
 describe("Video Generation Integration Test", () => {
   beforeAll(async () => {
-    cv = await cvPromise;
-    await (cv as any).onRuntimeInitialized;
+    cvInstance = cv; // Use the directly imported cv object
+    await (cvInstance as any).onRuntimeInitialized;
   });
 
   it("should process a sample image and return a valid video blob", async () => {
@@ -34,7 +34,7 @@ describe("Video Generation Integration Test", () => {
 
     // 2. Generate Layers（既存API：配列 + 寸法を渡す）
     const { foreground, background } = await generateLayers(
-      cv,
+      cvInstance,
       originalImageRGBA,
       width,
       height,
@@ -48,7 +48,7 @@ describe("Video Generation Integration Test", () => {
 
     // 3. Generate Frames
     const frames = await generateParallaxFrames(
-      cv,
+      cvInstance,
       foreground,
       background,
       width,

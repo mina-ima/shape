@@ -1,5 +1,4 @@
-import cvPromise from "@techstark/opencv-js";
-import cv from "@techstark/opencv-js";
+import type cv from "@techstark/opencv-js";
 
 export interface Point {
   x: number;
@@ -8,11 +7,11 @@ export interface Point {
 
 // Helper function to get a point at a specific distance along a contour
 const getPointAtDistance = (
-  cv: typeof import("@techstark/opencv-js"),
+  cvInstance: typeof cv,
   contour: cv.Mat,
   distance: number,
 ): Point => {
-  const perimeter = cv.arcLength(contour, true);
+  const perimeter = cvInstance.arcLength(contour, true);
   if (distance > perimeter) distance = perimeter;
   if (distance < 0) distance = 0;
 
@@ -40,8 +39,10 @@ const getPointAtDistance = (
   return { x: points[points.length - 2], y: points[points.length - 1] };
 };
 
-export async function extractLargestContour(mat: cv.Mat): Promise<Point[]> {
-  const cvInstance = await cvPromise;
+export function extractLargestContour(
+  cvInstance: typeof cv,
+  mat: cv.Mat,
+): Point[] {
   const contours = new cvInstance.MatVector();
   const hierarchy = new cvInstance.Mat();
 

@@ -1,8 +1,8 @@
 // src/compose/fill.test.ts
 import { describe, it, expect, beforeAll } from "vitest";
-import cvPromise from "@techstark/opencv-js";
+
 import { expandAndBlurBackground } from "./fill";
-import cvPromise from "../../lib/cv";
+import cvPromise from "@/lib/cv";
 
 let cv: typeof import("@techstark/opencv-js");
 

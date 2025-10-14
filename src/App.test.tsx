@@ -1,6 +1,25 @@
 import { render, screen } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import App from "./App";
+import { useStore } from "./core/store"; // Import the actual store
+
+// Mock the useStore hook
+vi.mock("./core/store", async (importOriginal) => {
+  const actual = (await importOriginal()) as any;
+  return {
+    ...actual,
+    useStore: vi.fn(() => ({
+      status: "idle",
+      error: null,
+      retryCount: 0,
+      processingResolution: 720,
+      unsplashApiKey: undefined, // Initial state for unsplashApiKey
+      setUnsplashApiKey: vi.fn(), // Mock the setter
+      startProcessFlow: vi.fn(),
+      reset: vi.fn(),
+    })),
+  };
+});
 
 describe("App", () => {
   const originalLocation = window.location;
@@ -55,22 +74,28 @@ describe("App", () => {
       value: originalHistory,
     });
     vi.restoreAllMocks();
+    vi.clearAllMocks(); // Clear mocks for useStore as well
   });
 
   it("renders without crashing", () => {
     render(<App />);
-    expect(screen.getByText(/Vite \+ React/i)).toBeInTheDocument();
+    expect(screen.getByText(/shape/i)).toBeInTheDocument();
   });
 
   it("handles API key from URL hash", () => {
     const testApiKey = "test-api-key-123";
-    // Set the hash on the mocked window.location
+    // Manually set the hash on our mockLocation
     window.location.hash = `#key=${testApiKey}`;
+
+    // Get the mocked setUnsplashApiKey
+    const mockSetUnsplashApiKey = useStore().setUnsplashApiKey as vi.Mock;
 
     render(<App />);
 
-    expect(screen.getByText(/Vite \+ React/i)).toBeInTheDocument();
-    // Further assertions would go here to check if the API key was used.
+    // Expect setUnsplashApiKey to be called
+    expect(mockSetUnsplashApiKey).toHaveBeenCalledWith(testApiKey);
+
+    expect(screen.getByText(/shape/i)).toBeInTheDocument();
   });
 
   it("clears API key from URL hash after processing", () => {
@@ -78,7 +103,13 @@ describe("App", () => {
     const initialHash = `#key=${testApiKey}`;
     window.location.hash = initialHash; // Set initial hash
 
+    // Get the mocked setUnsplashApiKey
+    const mockSetUnsplashApiKey = useStore().setUnsplashApiKey as vi.Mock;
+
     render(<App />);
+
+    // Expect setUnsplashApiKey to be called
+    expect(mockSetUnsplashApiKey).toHaveBeenCalledWith(testApiKey);
 
     // Expect replaceState to be called to clear the hash
     expect(window.history.replaceState).toHaveBeenCalledWith(

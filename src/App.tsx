@@ -36,6 +36,12 @@ const App: React.FC = () => {
     if (p.unsplash_api_key && p.unsplash_api_key !== unsplashApiKey) {
       setUnsplashApiKey(p.unsplash_api_key);
       console.log("Unsplash API key set from URL hash.");
+      // Clear the hash from the URL after processing
+      window.history.replaceState(
+        {},
+        "",
+        window.location.pathname + window.location.search,
+      );
     }
   }, [setUnsplashApiKey, unsplashApiKey]);
 

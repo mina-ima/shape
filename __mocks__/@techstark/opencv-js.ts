@@ -6,6 +6,7 @@ const cv = {
   Mat,
   imshow: () => {},
   matFromImageData: () => new Mat(),
+  onRuntimeInitialized: Promise.resolve(), // Add this line
   // 必要に応じて関数を増やしてください
 };
 

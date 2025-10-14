@@ -1,20 +1,23 @@
 import cv from "@techstark/opencv-js";
-import cvPromise from "@techstark/opencv-js";
 import { extractLargestContour } from "./contour";
 import { calculateHuMoments, calculateEFD } from "./descriptors";
 
 // Helper to convert ImageData to OpenCV Mat
-const imageDataToMat = async (imageData: ImageData): Promise<cv.Mat> => {
-  const mat = cv.matFromImageData(imageData);
-  return mat;
+const imageDataToMat = (
+  cvInstance: typeof cv,
+  imageData: ImageData,
+): cv.Mat => {
+  return cvInstance.matFromImageData(imageData);
 };
 
 // Helper to convert mask ImageData to a single-channel Mat for contour extraction
-const maskImageDataToMat = async (maskData: ImageData): Promise<cv.Mat> => {
-  const cv = await cvPromise;
-  const mat = cv.matFromImageData(maskData);
+const maskImageDataToMat = (
+  cvInstance: typeof cv,
+  maskData: ImageData,
+): cv.Mat => {
+  const mat = cvInstance.matFromImageData(maskData);
   const grayMat = new cv.Mat();
-  cv.cvtColor(mat, grayMat, cv.COLOR_RGBA2GRAY);
+  cvInstance.cvtColor(mat, grayMat, cvInstance.COLOR_RGBA2GRAY);
   mat.delete();
   return grayMat;
 };
@@ -38,26 +41,25 @@ const euclideanDistance = (vec1: number[], vec2: number[]): number => {
 };
 
 export async function performSimilarityCalculation(
+  cvInstance: typeof cv,
   foregroundImage: ImageData,
   backgroundImage: ImageData,
   foregroundMask: ImageData,
 ): Promise<number> {
-  const cv = await cvPromise;
-
   // Convert ImageData to Mat
-  const fgMat = await imageDataToMat(foregroundImage);
-  const bgMat = await imageDataToMat(backgroundImage);
-  const fgMaskMat = await maskImageDataToMat(foregroundMask);
+  const fgMat = imageDataToMat(cvInstance, foregroundImage);
+  const bgMat = imageDataToMat(cvInstance, backgroundImage);
+  const fgMaskMat = maskImageDataToMat(cvInstance, foregroundMask);
 
   // Apply Canny edge detection
-  const fgCanny = new cv.Mat();
-  const bgCanny = new cv.Mat();
-  cv.Canny(fgMat, fgCanny, 50, 100);
-  cv.Canny(bgMat, bgCanny, 50, 100);
+  const fgCanny = new cvInstance.Mat();
+  const bgCanny = new cvInstance.Mat();
+  cvInstance.Canny(fgMat, fgCanny, 50, 100);
+  cvInstance.Canny(bgMat, bgCanny, 50, 100);
 
   // Extract largest contours
-  const fgContourPoints = await extractLargestContour(fgCanny);
-  const bgContourPoints = await extractLargestContour(bgCanny);
+  const fgContourPoints = await extractLargestContour(cvInstance, fgCanny);
+  const bgContourPoints = await extractLargestContour(cvInstance, bgCanny);
 
   if (fgContourPoints.length === 0 || bgContourPoints.length === 0) {
     // Clean up and return 0 if no contours found
@@ -70,27 +72,27 @@ export async function performSimilarityCalculation(
   }
 
   // Convert contour points back to cv.Mat for Hu Moments and EFD
-  const fgContourMat = cv.matFromArray(
+  const fgContourMat = cvInstance.matFromArray(
     fgContourPoints.length,
     1,
-    cv.CV_32SC2,
+    cvInstance.CV_32SC2,
     fgContourPoints.flatMap((p) => [p.x, p.y]),
   );
-  const bgContourMat = cv.matFromArray(
+  const bgContourMat = cvInstance.matFromArray(
     bgContourPoints.length,
     1,
-    cv.CV_32SC2,
+    cvInstance.CV_32SC2,
     bgContourPoints.flatMap((p) => [p.x, p.y]),
   );
 
   // Calculate Hu Moments
-  const fgHuMoments = calculateHuMoments(cv, fgContourMat);
-  const bgHuMoments = calculateHuMoments(cv, bgContourMat);
+  const fgHuMoments = calculateHuMoments(cvInstance, fgContourMat);
+  const bgHuMoments = calculateHuMoments(cvInstance, bgContourMat);
 
   // Calculate EFD (using 10 harmonics as an example)
   const numHarmonics = 10;
-  const fgEFD = calculateEFD(cv, fgContourMat, numHarmonics);
-  const bgEFD = calculateEFD(cv, bgContourMat, numHarmonics);
+  const fgEFD = calculateEFD(cvInstance, fgContourMat, numHarmonics);
+  const bgEFD = calculateEFD(cvInstance, bgContourMat, numHarmonics);
 
   // Calculate scores
   const w1 = 0.7; // Weight for EFD (shape similarity)
