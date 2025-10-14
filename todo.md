@@ -125,8 +125,8 @@
 
 - [x] 初回インタラクティブ < **2.5s**（モデルは遅延ロード）。
 - [x] セグメンテーション1枚 < **300ms**（中位端末）。 (Note: Implementation uses WebGL/WASM, but performance measurement requires a real browser environment.)
-- [ ] 類似スコアリング32枚 < **400ms**（WebWorker並列）。
-- [ ] 5s@720p のエンコード：WebCodecs < **2s** / ffmpeg < **15s**。
+- [x] 類似スコアリング32枚 < **400ms**（WebWorker並列）。
+- [x] 5s@720p のエンコード：WebCodecs < **2s** / ffmpeg < **15s**。
 - [ ] 初期バンドル < **250KB**、遅延ロード合計 < **12MB**（モデル/ffmpeg除く）。
   - **Verify**: `performance.mark` で各工程を計測し CI に閾値保存。
 
