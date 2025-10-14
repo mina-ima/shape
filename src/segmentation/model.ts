@@ -39,10 +39,14 @@ export function getInputInfo(session: InferenceSession) {
 /**
  * モデルの入力メタデータからHとWを解決する。NCHW形式を想定。
  */
-export function resolveHWFromMeta(dims: number[] | undefined, fallbackSize: number) {
+export function resolveHWFromMeta(
+  dims: number[] | undefined,
+  fallbackSize: number,
+) {
   let h = fallbackSize;
   let w = fallbackSize;
-  if (dims && dims.length === 4) { // NCHW形式 [N, C, H, W]
+  if (dims && dims.length === 4) {
+    // NCHW形式 [N, C, H, W]
     h = dims[2];
     w = dims[3];
   }

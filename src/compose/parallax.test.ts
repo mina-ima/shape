@@ -1,9 +1,9 @@
 // src/compose/parallax.test.ts
 import { describe, it, expect, beforeAll } from "vitest";
-import cvPromise from "@techstark/opencv-js";
+
 import { generateLayers, generateParallaxFrames } from "./parallax";
 import { ParallaxOptions } from "@/core/types";
-import cvPromise from "../../lib/cv";
+import cvPromise from "@/lib/cv";
 
 let cv: typeof import("@techstark/opencv-js");
 

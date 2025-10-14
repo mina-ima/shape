@@ -96,12 +96,7 @@ export async function runSegmentation(
 
   const nchw = await imageToNCHWFloat32(image, h, w);
   const { Tensor } = await import("onnxruntime-web");
-  const inputTensor = new Tensor("float32", nchw, [
-    1,
-    3,
-    h,
-    w,
-  ]) as OrtTensor;
+  const inputTensor = new Tensor("float32", nchw, [1, 3, h, w]) as OrtTensor;
 
   const outputTensor = await runOnnxInference(inputTensor);
 

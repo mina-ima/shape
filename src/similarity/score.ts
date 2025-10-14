@@ -1,3 +1,4 @@
+import cv from "@techstark/opencv-js";
 import { performSimilarityCalculation } from "./scoring-logic";
 
 export async function scoreImagesInParallel(
@@ -72,7 +73,9 @@ export async function calculateSimilarityScore(
   backgroundImage: ImageData,
   foregroundMask: ImageData,
 ): Promise<number> {
+  const cvInstance = await cv;
   return performSimilarityCalculation(
+    cvInstance,
     foregroundImage,
     backgroundImage,
     foregroundMask,
