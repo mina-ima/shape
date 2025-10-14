@@ -99,7 +99,7 @@ const App: React.FC = () => {
               設定済み（{unsplashApiKey.slice(0, 6)}…）
             </span>
           ) : (
-            <span style={{ color: "red" }}>未設定</span>
+            <span style={{ color: "#CC0000" }}>未設定</span>
           )}
         </div>
         <div>
@@ -128,8 +128,8 @@ const App: React.FC = () => {
           padding: "10px 16px",
           borderRadius: 8,
           border: "1px solid #ccc",
-          background: !unsplashApiKey ? "#eee" : "#000",
-          color: !unsplashApiKey ? "#999" : "#fff",
+          background: !unsplashApiKey ? "#ddd" : "#000",
+          color: !unsplashApiKey ? "#666" : "#fff",
           cursor: !unsplashApiKey ? "not-allowed" : "pointer",
         }}
       >
