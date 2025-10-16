@@ -31,8 +31,12 @@ export async function loadOnnxModel(
 export function getInputInfo(session: InferenceSession) {
   const names = session.inputNames;
   const name = names[0]; // 最初の入力を想定
-  // inputMetadata は onnxruntime-web の型定義に存在しない場合があるため any でキャスト
-  const dims = (session.inputMetadata?.[name] as any)?.shape;
+
+  let dims: number[] | undefined;
+  if (session.inputMetadata) {
+    const metadata = session.inputMetadata as Record<string, any>;
+    dims = metadata[name]?.shape;
+  }
   return { names, name, dims };
 }
 
