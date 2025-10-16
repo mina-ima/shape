@@ -1,16 +1,22 @@
 // src/similarity/ranking.test.ts
 import { describe, it, expect, beforeAll } from "vitest";
-import cvPromise from "@/lib/cv";
+import getCV from "@/lib/cv";
 import { calculateSimilarityScore } from "./score";
 
 let cv: any;
+
+beforeAll(async () => {
+  cv = await getCV()();
+});
 
 const createShapeImageData = (
   shape: "square" | "rectangle",
   width: number,
   height: number,
 ): ImageData => {
-  const mat = new cv.Mat(height, width, cv.CV_8UC1, new cv.Scalar(0));
+  // 8UC1で作ってゼロ埋め
+  const mat = new cv.Mat(height, width, cv.CV_8UC1);
+  mat.data.fill(0);
   const white = new cv.Scalar(255);
 
   switch (shape) {
@@ -22,8 +28,10 @@ const createShapeImageData = (
       break;
   }
 
+  // GRAY -> RGBA（モック環境ではコピー挙動でもOK）
   const rgbaMat = new cv.Mat();
   cv.cvtColor(mat, rgbaMat, cv.COLOR_GRAY2RGBA);
+
   const imageData = new ImageData(
     new Uint8ClampedArray(rgbaMat.data),
     width,
@@ -37,10 +45,6 @@ const createShapeImageData = (
 };
 
 describe("Similarity Ranking", () => {
-  beforeAll(async () => {
-    cv = await cvPromise;
-  });
-
   it("should rank shapes correctly based on similarity", async () => {
     const width = 100;
     const height = 100;

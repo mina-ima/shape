@@ -1,12 +1,12 @@
 // src/compose/parallax.test.ts
 import { describe, it, expect, beforeAll } from "vitest";
 import { generateLayers, generateParallaxFrames } from "./parallax";
-import cvPromise from "@/lib/cv";
+import getCV from "@/lib/cv";
 
 let cv: any;
 
 beforeAll(async () => {
-  cv = await cvPromise;
+  cv = await getCV();
 });
 
 describe("Layer Generation", () => {
@@ -16,10 +16,10 @@ describe("Layer Generation", () => {
 
     const originalImageData = new Uint8Array(width * height * 4);
     for (let i = 0; i < width * height * 4; i += 4) {
-      originalImageData[i] = 255; // Red
-      originalImageData[i + 1] = 0;
-      originalImageData[i + 2] = 0;
-      originalImageData[i + 3] = 255; // Opaque
+      originalImageData[i] = 255;     // R
+      originalImageData[i + 1] = 0;   // G
+      originalImageData[i + 2] = 0;   // B
+      originalImageData[i + 3] = 255; // A
     }
 
     const alphaMaskData = new Uint8Array(width * height);
@@ -34,11 +34,11 @@ describe("Layer Generation", () => {
       bgImageData[i] = 0;
       bgImageData[i + 1] = 255; // Green
       bgImageData[i + 2] = 0;
-      bgImageData[i + 3] = 255; // Opaque
+      bgImageData[i + 3] = 255;
     }
 
+    // parallax.ts は cv を引数に取らない実装なので渡さない
     const { foreground, background } = await generateLayers(
-      cv,
       originalImageData,
       width,
       height,
@@ -52,8 +52,10 @@ describe("Layer Generation", () => {
 
     expect(foreground).toBeDefined();
     expect(background).toBeDefined();
-    expect(foreground.channels()).toBe(4);
-    expect(background.channels()).toBe(4);
+    expect(foreground.channels()).toBe(4); // RGBA
+    expect(background.channels()).toBe(3); // parallax.ts で RGB に変換
+
+    // 端のα確認
     expect(foreground.ptr(0, 0)[3]).toBe(0);
     expect(foreground.ptr(0, width - 1)[3]).toBe(255);
 
@@ -63,13 +65,6 @@ describe("Layer Generation", () => {
 });
 
 describe("Parallax Animation", () => {
-  const defaultParallaxOptions: any = {
-    panAmount: 0.05,
-    fgScale: 1.1,
-    bgScale: 1.2,
-    brightness: 1.0,
-  };
-
   it("should generate parallax animation frames", async () => {
     const width = 100;
     const height = 100;
@@ -85,8 +80,8 @@ describe("Parallax Animation", () => {
     const backgroundLayer = new cv.Mat(height, width, cv.CV_8UC3);
     backgroundLayer.data.set(bgData);
 
+    // parallax.ts の API に合わせて options は渡さない
     const frames = await generateParallaxFrames(
-      cv,
       foregroundLayer,
       backgroundLayer,
       width,
@@ -94,7 +89,6 @@ describe("Parallax Animation", () => {
       duration,
       fps,
       0,
-      defaultParallaxOptions,
     );
 
     expect(frames).toBeDefined();
