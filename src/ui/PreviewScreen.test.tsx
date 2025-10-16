@@ -51,6 +51,13 @@ describe("PreviewScreen", () => {
     expect(saveFile).toHaveBeenCalledWith(mockVideoBlob, "video/webm");
   });
 
+  it("should render a '共有' button", () => {
+    render(<PreviewScreen videoBlob={mockVideoBlob} />);
+
+    const shareButton = screen.getByRole("button", { name: "共有" });
+    expect(shareButton).toBeInTheDocument();
+  });
+
   it("should revoke object URL on unmount", () => {
     const { unmount } = render(<PreviewScreen videoBlob={mockVideoBlob} />);
     expect(URL.createObjectURL).toHaveBeenCalledWith(mockVideoBlob);
