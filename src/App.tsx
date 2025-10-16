@@ -36,6 +36,7 @@ const App: React.FC = () => {
   const [processingResSnapshot, setProcessingResSnapshot] = useState<
     number | null
   >(null);
+  const [inputImage, setInputImage] = useState<ImageBitmap | null>(null);
 
   // 初回 & ハッシュ変更で unsplash_api_key を取り込む
   const syncKeyFromHash = useCallback(() => {
@@ -58,6 +59,21 @@ const App: React.FC = () => {
     return () => window.removeEventListener("hashchange", syncKeyFromHash);
   }, [syncKeyFromHash]);
 
+  const handleImageSelect = async (
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      const imageBitmap = await createImageBitmap(file);
+      setInputImage(imageBitmap);
+    }
+  };
+
+  const handleCameraInput = async () => {
+    // Placeholder for camera input logic
+    alert("カメラ入力はまだ実装されていません。");
+  };
+
   const handleStart = async () => {
     if (!unsplashApiKey) {
       useStore.setState({
@@ -67,10 +83,17 @@ const App: React.FC = () => {
       });
       return;
     }
+    if (!inputImage) {
+      useStore.setState({
+        status: "error",
+        error: "画像が選択されていません。",
+      });
+      return;
+    }
     setProcessingResSnapshot(processingResolution);
     setProcessingHint(true); // 先に true にする
     try {
-      await startProcessFlow();
+      await startProcessFlow(inputImage); // Pass inputImage to startProcessFlow
     } finally {
       // microtask だと同フレームで消えてしまう可能性があるため、次フレームで解除
       setTimeout(() => setProcessingHint(false), 0);
@@ -105,8 +128,19 @@ const App: React.FC = () => {
       <h1>shape</h1>
 
       <section style={{ marginBottom: 16 }}>
-        {/* 画像入力→推論→マスク表示のMVPデモ（ここで loading-cloud も出ます） */}
-        <SegmentationDemo />
+        {/* 画像入力エリア */}
+        <div style={{ marginBottom: 16 }}>
+          <label>
+            ファイルを選択:
+            <input type="file" accept="image/*" onChange={handleImageSelect} />
+          </label>
+          <button onClick={handleCameraInput}>カメラで撮影</button>
+          {inputImage && (
+            <p>
+              選択中の画像: {inputImage.width}x{inputImage.height}
+            </p>
+          )}
+        </div>
 
         <div>
           <strong>Unsplash API Key:</strong>{" "}
@@ -142,17 +176,17 @@ const App: React.FC = () => {
       <button
         aria-label="撮影/選択"
         onClick={handleStart}
-        disabled={!unsplashApiKey || isProcessingUI}
+        disabled={!unsplashApiKey || isProcessingUI || !inputImage}
         style={{
           padding: "10px 16px",
           borderRadius: 8,
           border: "1px solid #ccc",
-          background: !unsplashApiKey ? "#ddd" : "#000",
-          color: !unsplashApiKey ? "#666" : "#fff",
-          cursor: !unsplashApiKey ? "not-allowed" : "pointer",
+          background: !unsplashApiKey || !inputImage ? "#ddd" : "#000",
+          color: !unsplashApiKey || !inputImage ? "#666" : "#fff",
+          cursor: !unsplashApiKey || !inputImage ? "not-allowed" : "pointer",
         }}
       >
-        {isProcessingUI ? "処理中..." : "処理を開始"}
+        {isProcessingUI ? "処理中..." : "撮影/選択"}
       </button>
 
       {/* processing 中の補助表示（テストで期待） */}

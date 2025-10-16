@@ -1,14 +1,25 @@
-export const getMediaStream = async (): Promise<MediaStream | undefined> => {
+export class CameraPermissionDeniedError extends Error {
+  constructor(message = "Camera permission denied") {
+    super(message);
+    this.name = "CameraPermissionDeniedError";
+  }
+}
+
+export const getMediaStream = async (): Promise<MediaStream> => {
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ video: true });
     return stream;
   } catch (error) {
     if (error instanceof DOMException && error.name === "NotAllowedError") {
-      console.warn("Camera permission denied.");
-      return undefined;
+      console.log(
+        "Camera permission denied, throwing CameraPermissionDeniedError.",
+      );
+      throw new CameraPermissionDeniedError(
+        "Camera permission was denied by the user.",
+      );
     } else {
       console.error("Error accessing camera:", error);
-      return undefined;
+      throw error; // Re-throw other errors
     }
   }
 };

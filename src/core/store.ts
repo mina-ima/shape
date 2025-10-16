@@ -1,6 +1,11 @@
 // src/core/store.ts
 import { create } from "zustand";
-import { runProcessing } from "../processing";
+import { runSegmentation } from "../processing";
+import {
+  getMediaStream,
+  processImage,
+  CameraPermissionDeniedError,
+} from "../camera";
 
 export const MAX_RETRIES = 3;
 
@@ -17,7 +22,7 @@ type AppState = {
   setUnsplashApiKey: (key: string | null) => void;
   setProcessingResolution: (res: number) => void;
   reset: () => void;
-  startProcessFlow: () => Promise<void>;
+  startProcessFlow: (inputImage: ImageBitmap) => Promise<void>;
 
   _setError: (msg: string) => void;
 };
@@ -47,7 +52,8 @@ export const useStore = create<AppState>((set, get) => ({
 
   _setError: (msg) => set({ status: "error", error: msg }),
 
-  startProcessFlow: async () => {
+  startProcessFlow: async (inputImage: ImageBitmap) => {
+    console.log("startProcessFlow called.");
     const { unsplashApiKey } = get();
 
     if (!unsplashApiKey) {
@@ -55,10 +61,12 @@ export const useStore = create<AppState>((set, get) => ({
         status: "error",
         error: "Unsplash API Key is missing",
       });
+      console.log("startProcessFlow: API Key missing.");
       return;
     }
 
     set({ status: "processing", error: null });
+    console.log("startProcessFlow: Status set to processing.");
 
     const nextResolution = (current: number) => {
       if (current >= 720) return 540;
@@ -70,25 +78,51 @@ export const useStore = create<AppState>((set, get) => ({
       resolution: number,
       attemptNo: number,
     ): Promise<void> => {
+      console.log(
+        `Attempt ${attemptNo} started with resolution ${resolution}.`,
+      );
       try {
-        // 現在の試行番号を反映
         set({ retryCount: attemptNo, processingResolution: resolution });
-        await runProcessing(resolution);
 
-        // 成功: 試行番号を成功回として残す（tests: 1 を期待）
+        // 1. Process image (resize, etc.)
+        const processedImage = await processImage(inputImage);
+
+        // 2. Run segmentation
+        await runSegmentation(processedImage);
+
         set({
           status: "success",
           error: null,
-          retryCount: attemptNo, // ← 1 回目成功なら 1
+          retryCount: attemptNo,
         });
+        console.log("Attempt successful.");
         return;
       } catch (err) {
         const message =
-          err instanceof Error
-            ? err.message
-            : typeof err === "string"
-              ? err
-              : "Unknown error";
+          err instanceof CameraPermissionDeniedError
+            ? "権限がありません。写真を選択に切替えます"
+            : err instanceof Error
+              ? err.message
+              : typeof err === "string"
+                ? err
+                : "Unknown error";
+        console.log("Error caught in attempt:", message);
+
+        // カメラ権限エラーの場合はリトライせず、即座にエラー状態にする
+        if (err instanceof CameraPermissionDeniedError) {
+          set({
+            status: "error",
+            error: message,
+            retryCount: attemptNo, // 試行回数を維持
+          });
+          console.log(
+            "Store: CameraPermissionDeniedError caught. Status:",
+            get().status,
+            "Error:",
+            get().error,
+          );
+          return;
+        }
 
         if (attemptNo >= MAX_RETRIES) {
           // すべて失敗
@@ -97,6 +131,10 @@ export const useStore = create<AppState>((set, get) => ({
             error: message,
             retryCount: MAX_RETRIES,
           });
+          console.log(
+            "Attempt failed (max retries reached). Status:",
+            get().status,
+          );
           return;
         }
 
@@ -108,11 +146,13 @@ export const useStore = create<AppState>((set, get) => ({
           error: null,
           status: "processing",
         });
+        console.log("Attempt failed (retrying). Status:", get().status);
 
-        // 1秒後に自動リトライ
-        setTimeout(() => {
-          attempt(nextRes, attemptNo + 1);
-        }, 1000);
+        await new Promise<void>((resolve) => {
+          setTimeout(() => {
+            attempt(nextRes, attemptNo + 1).then(resolve);
+          }, 1000);
+        });
       }
     };
 

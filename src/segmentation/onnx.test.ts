@@ -15,14 +15,15 @@ const { getOnnxInputDimensions: hoistedGetOnnxInputDimensions } = vi.hoisted(
 );
 
 vi.mock("onnxruntime-web", async () => {
-  const actual = await vi.importActual("onnxruntime-web");
+  const actualModule =
+    await vi.importActual<typeof import("onnxruntime-web")>("onnxruntime-web"); // actual を await して解決
   const mockCreate = vi.fn(() => ({
     run: vi.fn(() => Promise.resolve({})), // run メソッドもモック
   }));
   return {
-    ...actual,
+    ...actualModule, // 解決されたモジュールを展開
     InferenceSession: {
-      ...actual.InferenceSession,
+      ...actualModule.InferenceSession,
       create: mockCreate,
     },
   };

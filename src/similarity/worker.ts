@@ -11,7 +11,7 @@ const initialize = () => {
     // Wrap the 'thenable' cv object in a standard Promise to ensure compatibility
     cvPromise = Promise.resolve(cv).then((cvModule) => {
       // The resolved value might be the module itself, or a module with a default export
-      return ((cvModule as unknown) as CvModule).default || cvModule;
+      return (cvModule as unknown as CvModule).default || cvModule;
     });
   }
   return cvPromise;
