@@ -47,21 +47,15 @@ describe("camera module", () => {
       });
     });
 
-    it("should return undefined and log a warning if camera permission is denied", async () => {
-      const consoleWarnSpy = vi
-        .spyOn(console, "warn")
-        .mockImplementation(() => {});
+    it("should throw CameraPermissionDeniedError if camera permission is denied", async () => {
       getUserMediaSpy.mockRejectedValueOnce(
         new DOMException("Permission denied", "NotAllowedError"),
       );
 
-      const stream = await getMediaStream(); // Await the result
-      expect(stream).toBeUndefined();
-      expect(getUserMediaSpy).toHaveBeenCalledWith({ video: true }); // getUserMedia が呼び出されたことを確認
-      expect(consoleWarnSpy).toHaveBeenCalledWith(
-        "Camera permission denied.", // 期待メッセージを修正
+      await expect(getMediaStream()).rejects.toThrow(
+        cameraModule.CameraPermissionDeniedError,
       );
-      consoleWarnSpy.mockRestore();
+      expect(getUserMediaSpy).toHaveBeenCalledWith({ video: true });
     });
   });
 

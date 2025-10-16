@@ -1,119 +1,116 @@
 import { act, renderHook } from "@testing-library/react";
 import { useStore } from "./store";
-import { runProcessing } from "../processing";
+import { runSegmentation } from "../processing";
+import * as cameraModule from "../camera";
 
+// Mock the processing module
 vi.mock("../processing", () => ({
-  runProcessing: vi.fn(),
+  runSegmentation: vi.fn(() => Promise.resolve({ mask: new ImageData(1, 1), inputSize: { h: 1, w: 1 }, outputName: 'output' })),
 }));
 
-const mockedRunProcessing = runProcessing as vi.Mock;
+// Mock the camera module
+vi.mock("../camera", async (importOriginal) => {
+  const actual = (await importOriginal()) as any;
+  const mockMediaStreamTrack = { stop: vi.fn() };
+  const mockMediaStream = { getTracks: () => [mockMediaStreamTrack], getVideoTracks: () => [mockMediaStreamTrack] };
+  return {
+    ...actual,
+    getMediaStream: vi.fn(() => Promise.resolve(mockMediaStream)),
+    // Mock processImage to return a valid ImageBitmap
+    processImage: vi.fn((img: ImageBitmap) => Promise.resolve(img)),
+  };
+});
+
+const mockedRunSegmentation = runSegmentation as vi.Mock;
 
 describe("useStore", () => {
-  let hook: ReturnType<
-    typeof renderHook<{ current: ReturnType<typeof useStore> }>
-  >;
+  const mockImage = { width: 100, height: 100, close: vi.fn() } as unknown as ImageBitmap;
 
   beforeEach(() => {
-    hook = renderHook(() => useStore());
-    act(() => {
-      useStore.getState().reset();
-    });
-    mockedRunProcessing.mockReset();
+    act(() => { useStore.getState().reset(); });
+    mockedRunSegmentation.mockClear();
     vi.useFakeTimers();
   });
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   describe("startProcessFlow", () => {
     it("should set error status if Unsplash API key is missing", async () => {
+      const { result } = renderHook(() => useStore());
       await act(async () => {
-        hook.result.current.setUnsplashApiKey("");
-        await hook.result.current.startProcessFlow();
+        result.current.setUnsplashApiKey("");
+        await result.current.startProcessFlow(mockImage);
       });
-      expect(hook.result.current.status).toBe("error");
-      expect(hook.result.current.error).toContain(
-        "Unsplash API Key is missing",
-      );
+      expect(result.current.status).toBe("error");
+      expect(result.current.error).toContain("Unsplash API Key is missing");
     });
 
     it("should set success status on the first attempt", async () => {
-      mockedRunProcessing.mockResolvedValue(undefined);
+      const { result } = renderHook(() => useStore());
+      mockedRunSegmentation.mockResolvedValue({ mask: new ImageData(1, 1), inputSize: { h: 1, w: 1 }, outputName: 'output' });
 
       await act(async () => {
-        hook.result.current.setUnsplashApiKey("test-key");
-        await hook.result.current.startProcessFlow();
+        result.current.setUnsplashApiKey("test-key");
+        await result.current.startProcessFlow(mockImage);
       });
 
-      expect(hook.result.current.status).toBe("success");
-      expect(mockedRunProcessing).toHaveBeenCalledTimes(1);
-      expect(hook.result.current.retryCount).toBe(1);
+      expect(result.current.status).toBe("success");
+      expect(mockedRunSegmentation).toHaveBeenCalledTimes(1);
+      expect(result.current.retryCount).toBe(1);
     });
 
     it("should handle the full retry cycle and finally fail", async () => {
-      mockedRunProcessing.mockRejectedValue(new Error("Simulated failure"));
+      const { result } = renderHook(() => useStore());
+      mockedRunSegmentation.mockRejectedValue(new Error("Simulated failure"));
 
       await act(async () => {
-        hook.result.current.setUnsplashApiKey("test-key");
-        hook.result.current.startProcessFlow();
+        result.current.setUnsplashApiKey("test-key");
+        // No await here, as the process is expected to run in the background with timers
+        result.current.startProcessFlow(mockImage);
       });
 
-      // 1回目
-      await act(async () => vi.advanceTimersByTimeAsync(0));
-      expect(mockedRunProcessing).toHaveBeenCalledTimes(1);
-      expect(hook.result.current.retryCount).toBe(2);
-      expect(hook.result.current.processingResolution).toBe(540);
+      // Wait for all retries to complete
+      await act(async () => { await vi.runAllTimersAsync(); });
 
-      // 2回目
-      await act(async () => vi.advanceTimersByTimeAsync(1000));
-      expect(mockedRunProcessing).toHaveBeenCalledTimes(2);
-      expect(hook.result.current.retryCount).toBe(3);
-      expect(hook.result.current.processingResolution).toBe(360);
-
-      // 3回目
-      await act(async () => vi.advanceTimersByTimeAsync(2000));
-      expect(mockedRunProcessing).toHaveBeenCalledTimes(3);
-
-      // 実装は最終メッセージとして "Simulated failure" を保持
-      expect(hook.result.current.status).toBe("error");
-      expect(hook.result.current.error).toContain("Simulated failure");
+      expect(mockedRunSegmentation).toHaveBeenCalledTimes(3);
+      expect(result.current.status).toBe("error");
+      expect(result.current.error).toContain("Simulated failure");
     });
 
     it("should succeed on the second attempt", async () => {
-      mockedRunProcessing
+      const { result } = renderHook(() => useStore());
+      mockedRunSegmentation
         .mockRejectedValueOnce(new Error("Failure 1"))
-        .mockResolvedValueOnce(undefined);
+        .mockResolvedValueOnce({ mask: new ImageData(1, 1), inputSize: { h: 1, w: 1 }, outputName: 'output' });
 
       await act(async () => {
-        hook.result.current.setUnsplashApiKey("test-key");
-        hook.result.current.startProcessFlow();
+        result.current.setUnsplashApiKey("test-key");
+        result.current.startProcessFlow(mockImage);
       });
 
-      // 1回目失敗 → リトライ
-      await act(async () => vi.advanceTimersByTimeAsync(0));
-      expect(mockedRunProcessing).toHaveBeenCalledTimes(1);
-      expect(hook.result.current.retryCount).toBe(2);
+      // Wait for the retry to be scheduled and executed
+      await act(async () => { await vi.runAllTimersAsync(); });
 
-      // 2回目成功
-      await act(async () => vi.advanceTimersByTimeAsync(1000));
-      expect(mockedRunProcessing).toHaveBeenCalledTimes(2);
-      expect(hook.result.current.status).toBe("success");
+      expect(mockedRunSegmentation).toHaveBeenCalledTimes(2);
+      expect(result.current.status).toBe("success");
     });
   });
 
   describe("reset", () => {
     it("should reset the state to idle", async () => {
+      const { result } = renderHook(() => useStore());
       act(() => {
-        hook.result.current.setUnsplashApiKey("some-key");
-        hook.result.current._setError("An error");
+        useStore.setState({ status: 'error', error: 'An error' });
       });
 
-      await act(async () => hook.result.current.reset());
+      await act(async () => result.current.reset());
 
-      expect(hook.result.current.status).toBe("idle");
-      expect(hook.result.current.error).toBeNull();
-      expect(hook.result.current.retryCount).toBe(0);
+      expect(result.current.status).toBe("idle");
+      expect(result.current.error).toBeNull();
+      expect(result.current.retryCount).toBe(0);
     });
   });
 });

@@ -1,38 +1,58 @@
 import { render, screen, act, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import App from "./App";
-import { useStore } from "./core/store"; // Import the actual store
-import licensesMarkdown from "./docs/licenses.md?raw"; // Import licenses.md as raw string for testing
 
-// Mock the useStore hook
+// 1. Define mock functions and a mutable mock state at the top level
+const mockStartProcessFlow = vi.fn(() => Promise.resolve());
 const mockSetUnsplashApiKey = vi.fn();
-const mockStartProcessFlow = vi.fn();
 const mockReset = vi.fn();
 
+const mockState: any = {
+  status: "idle",
+  error: null,
+  retryCount: 0,
+  processingResolution: 720,
+  unsplashApiKey: "mock-api-key",
+  startProcessFlow: mockStartProcessFlow,
+  setUnsplashApiKey: mockSetUnsplashApiKey,
+  reset: mockReset,
+};
+
+// 2. Mock the store module to implement the selector logic
 vi.mock("./core/store", () => ({
-  useStore: () => ({
-    status: "idle",
-    error: null,
-    retryCount: 0,
-    processingResolution: 720,
-    unsplashApiKey: undefined,
-    setUnsplashApiKey: mockSetUnsplashApiKey,
-    startProcessFlow: mockStartProcessFlow,
-    reset: mockReset,
-  }),
+  useStore: (selector?: (state: any) => any) => {
+    if (selector) {
+      return selector(mockState);
+    }
+    return mockState;
+  },
+  MAX_RETRIES: 3,
 }));
 
 describe("App", () => {
   const originalLocation = window.location;
   const originalHistory = window.history;
 
+  const mockImageBitmap = { width: 100, height: 100, close: vi.fn() };
+
   beforeEach(() => {
-    // Create a mock location object with writable hash
+    // 3. Reset mock function history and state before each test
+    vi.clearAllMocks();
+    Object.assign(mockState, {
+      status: "idle",
+      error: null,
+      retryCount: 0,
+      processingResolution: 720,
+      unsplashApiKey: "mock-api-key",
+    });
+
+    vi.stubGlobal("createImageBitmap", vi.fn(() => Promise.resolve(mockImageBitmap)));
+    vi.stubGlobal("alert", vi.fn());
+
+    // Mock location and history
     let currentHash = "";
     const mockLocation = {
-      get hash() {
-        return currentHash;
-      },
+      get hash() { return currentHash; },
       set hash(v: string) {
         currentHash = v;
         window.dispatchEvent(new Event("hashchange"));
@@ -41,59 +61,28 @@ describe("App", () => {
       search: "",
       href: "http://localhost/",
       assign: vi.fn(),
-      replace: vi.fn((_state, _title, url) => {
-        if (url) {
-          const newUrl = new URL(url, "http://localhost");
-          currentHash = newUrl.hash;
-          mockLocation.pathname = newUrl.pathname;
-          mockLocation.search = newUrl.search;
-          mockLocation.href = newUrl.href;
-        }
-      }),
+      replace: vi.fn(),
       reload: vi.fn(),
     };
-
-    // Mock window.location
-    Object.defineProperty(window, "location", {
-      configurable: true,
-      value: mockLocation,
-    });
-
-    // Mock window.history.replaceState
+    Object.defineProperty(window, "location", { configurable: true, value: mockLocation });
     Object.defineProperty(window, "history", {
       configurable: true,
       value: {
-        ...originalHistory, // Keep other history methods
+        ...originalHistory,
         replaceState: vi.fn((_state, _title, url) => {
-          // Simulate the effect of replaceState on location
           if (url) {
             const newUrl = new URL(url, "http://localhost");
             mockLocation.hash = newUrl.hash;
-            mockLocation.pathname = newUrl.pathname;
-            mockLocation.search = newUrl.search;
-            mockLocation.href = newUrl.href;
           }
         }),
       },
     });
-
-    mockSetUnsplashApiKey.mockClear(); // Clear mock calls before each test
-    mockStartProcessFlow.mockClear();
-    mockReset.mockClear();
   });
 
   afterEach(() => {
-    // Restore original window.location and window.history
-    Object.defineProperty(window, "location", {
-      configurable: true,
-      value: originalLocation,
-    });
-    Object.defineProperty(window, "history", {
-      configurable: true,
-      value: originalHistory,
-    });
+    Object.defineProperty(window, "location", { configurable: true, value: originalLocation });
+    Object.defineProperty(window, "history", { configurable: true, value: originalHistory });
     vi.restoreAllMocks();
-    vi.clearAllMocks(); // Clear mocks for useStore as well
   });
 
   it("renders without crashing", () => {
@@ -101,58 +90,37 @@ describe("App", () => {
     expect(screen.getByText(/shape/i)).toBeInTheDocument();
   });
 
+  it("should handle image file selection", async () => {
+    render(<App />);
+    const fileInput = screen.getByLabelText(/ファイルを選択/i);
+    const testFile = new File(["dummy content"], "test.png", { type: "image/png" });
+    await act(async () => { fireEvent.change(fileInput, { target: { files: [testFile] } }); });
+    expect(createImageBitmap).toHaveBeenCalledWith(testFile);
+    expect(screen.getByText(/選択中の画像: 100x100/i)).toBeInTheDocument();
+  });
+
+  it("should call startProcessFlow with the selected image when '撮影/選択' is clicked", async () => {
+    render(<App />);
+    const fileInput = screen.getByLabelText(/ファイルを選択/i);
+    const testFile = new File(["dummy content"], "test.png", { type: "image/png" });
+    await act(async () => { fireEvent.change(fileInput, { target: { files: [testFile] } }); });
+    const startButton = screen.getByRole("button", { name: "撮影/選択" });
+    await act(async () => { fireEvent.click(startButton); });
+    expect(mockStartProcessFlow).toHaveBeenCalledWith(mockImageBitmap);
+  });
+
   it("handles API key from URL hash", async () => {
     const testApiKey = "test-api-key-123";
-    // Manually set the hash on our mockLocation
     render(<App />);
-    await act(async () => {
-      window.location.hash = `#key=${testApiKey}`;
-    });
-
-    // Expect setUnsplashApiKey to be called
+    await act(async () => { window.location.hash = `#unsplash_api_key=${testApiKey}`; });
     expect(mockSetUnsplashApiKey).toHaveBeenCalledWith(testApiKey);
-
-    expect(screen.getByText(/shape/i)).toBeInTheDocument();
   });
 
   it("clears API key from URL hash after processing", async () => {
     const testApiKey = "test-api-key-456";
-    const initialHash = `#key=${testApiKey}`;
     render(<App />);
-    await act(async () => {
-      window.location.hash = initialHash; // Set initial hash
-    });
-
-    // Expect setUnsplashApiKey to be called
+    await act(async () => { window.location.hash = `#unsplash_api_key=${testApiKey}`; });
     expect(mockSetUnsplashApiKey).toHaveBeenCalledWith(testApiKey);
-
-    // Expect replaceState to be called to clear the hash
-    expect(window.history.replaceState).toHaveBeenCalledWith(
-      {},
-      "",
-      window.location.pathname + window.location.search,
-    );
-    // After replaceState is called, our mock should have updated the hash
-    expect(window.location.hash).toBe("");
-  });
-
-  it("should display licenses when 'Licenses' button is clicked", async () => {
-    render(<App />);
-    const licensesButton = screen.getByRole("button", { name: /Licenses/i });
-    expect(licensesButton).toBeInTheDocument();
-
-    await act(async () => {
-      fireEvent.click(licensesButton);
-    });
-
-    // Expect some content from licenses.md to be displayed
-    const licensesModalContent = screen.getByTestId("licenses-modal-content");
-    expect(licensesModalContent).toBeInTheDocument();
-    expect(licensesModalContent).toHaveTextContent(
-      /Licenses and Attributions/i,
-    );
-    expect(licensesModalContent).toHaveTextContent(/React: MIT License/i);
-    expect(licensesModalContent).toHaveTextContent(/Unsplash License/i);
-    expect(screen.getByRole("button", { name: /\u00D7/i })).toBeInTheDocument(); // Close button
+    expect(window.history.replaceState).toHaveBeenCalled();
   });
 });

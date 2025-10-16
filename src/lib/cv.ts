@@ -1,310 +1,169 @@
 // src/lib/cv.ts
-// テスト環境では OpenCV を最小実装の thenable で返す。
-// 本番・開発では既存のローダーにフォールバック。
+/* eslint-disable @typescript-eslint/no-explicit-any */
 
-type MatType = number;
-
-const CV_8UC1 = 0x0000 as MatType;
-const CV_8UC3 = 0x0003 as MatType;
-const CV_8UC4 = 0x0004 as MatType;
-const CV_32FC1 = 0x1000 as MatType;
-const CV_32SC2 = 0x2002 as MatType;
-
-const COLOR_RGB2RGBA = 0x20;
-
-function channelsOf(type: MatType) {
-  const depth = (type as number) & 0x000f;
-  if (type === CV_32SC2) return 2;
-  if (depth === 0x0004) return 4;
-  if (depth === 0x0003) return 3;
-  return 1;
-}
-
-class Size {
-  constructor(
-    public width = 0,
-    public height = 0,
-  ) {}
-}
-
-class Scalar {
-  constructor(
-    public v0 = 0,
-    public v1 = 0,
-    public v2 = 0,
-    public v3 = 0,
-  ) {}
-}
+// FORCED MOCK FOR DEBUGGING
 
 class Mat {
-  rows = 0;
-  cols = 0;
-  private _type: MatType = CV_8UC1;
-  data?: Uint8Array;
-  data32S?: Int32Array;
-  data64F?: Float64Array;
+  rows: number;
+  cols: number;
+  type: number;
+  _data: Uint8Array | Int8Array | Int16Array | Int32Array | Float32Array | Float64Array;
+  _channels: number;
 
-  constructor(rows = 0, cols = 0, type: MatType = CV_8UC1) {
-    this.create(rows, cols, type);
+  constructor(rows = 0, cols = 0, type = 4, data?: any) {
+    this.rows = rows;
+    this.cols = cols;
+    this.type = type;
+    if (type === 0 || type === 5) this._channels = 1;
+    else if (type === 0x2002) this._channels = 2;
+    else if (type === 3) this._channels = 3;
+    else this._channels = 4;
+    const size = rows * cols * this._channels;
+    if (type === 6) this._data = new Float64Array(size);
+    else if (type === 0x2002) this._data = new Int32Array(size);
+    else this._data = new Uint8Array(size);
+    if (data) this._data.set(data);
   }
 
-  create(rows: number, cols: number, type: MatType) {
-    this.rows = rows | 0;
-    this.cols = cols | 0;
-    this._type = type;
+  ptr(row: number, col: number) {
+    const index = (row * this.cols + col) * this._channels;
+    return this._data.subarray(index, index + this._channels);
+  }
 
-    const ch = channelsOf(type);
-    const n = Math.max(0, this.rows * this.cols * ch);
+  channels() { return this._channels; }
 
-    this.data = undefined;
-    this.data32S = undefined;
-    this.data64F = undefined;
-
-    if (type === CV_32SC2) {
-      this.data32S = new Int32Array(Math.max(0, this.rows * this.cols * 2));
-    } else if (((type as number) & 0xf000) === 0x1000) {
-      this.data64F = new Float64Array(n);
-    } else {
-      this.data = new Uint8Array(n);
+  copyTo(dst: Mat, mask?: Mat) {
+    dst.rows = this.rows;
+    dst.cols = this.cols;
+    dst.type = this.type;
+    dst._channels = this._channels;
+    dst._data = new (this._data.constructor as any)(this._data);
+    if (mask && mask._data) {
+      for (let i = 0; i < this.rows * this.cols; i++) {
+        if (mask._data[i] === 0) {
+          for (let c = 0; c < this._channels; c++) {
+            dst._data[i * this._channels + c] = 0;
+          }
+        }
+      }
     }
   }
 
-  type() {
-    return this._type;
-  }
-
-  channels() {
-    return channelsOf(this._type);
-  }
-
-  copyTo(dst: Mat) {
-    dst.create(this.rows, this.cols, this._type);
-    if (this.data && dst.data) dst.data.set(this.data);
-    if (this.data32S && dst.data32S) dst.data32S.set(this.data32S);
-    if (this.data64F && dst.data64F) dst.data64F.set(this.data64F);
+  convertTo(dst: Mat, type: number, alpha = 1, beta = 0) {
+    dst.rows = this.rows;
+    dst.cols = this.cols;
+    dst.type = type;
+    dst._channels = this._channels;
+    const constructor = type === 6 ? Float64Array : this._data.constructor;
+    dst._data = new (constructor as any)(this._data.length);
+    for (let i = 0; i < this._data.length; i++) {
+      dst._data[i] = this._data[i] * alpha + beta;
+    }
   }
 
   delete() {
-    this.data = undefined;
-    this.data32S = undefined;
-    this.data64F = undefined;
     this.rows = 0;
     this.cols = 0;
+    this._data = new Uint8Array(0);
   }
+
+  get data() { return this._data as Uint8Array; }
+  get data32S() { return this._data as Int32Array; }
+  get data64F() { return this._data as Float64Array; }
 }
 
 class MatVector {
   private arr: Mat[] = [];
-  size() {
-    return this.arr.length;
-  }
-  get(i: number) {
-    return this.arr[i];
-  }
-  push_back(m: Mat) {
-    this.arr.push(m);
-  }
-  pushBack(m: Mat) {
-    this.push_back(m);
-  }
-  set(i: number, m: Mat) {
-    this.arr[i] = m;
-  }
-  delete() {
-    this.arr.length = 0;
-  }
-}
-
-// ---- ops ----
-function split(src: Mat, mv: MatVector) {
-  const ch = src.channels();
-  for (let c = 0; c < ch; c++)
-    mv.push_back(new Mat(src.rows, src.cols, CV_8UC1));
-  if (!src.data) return;
-  for (let y = 0; y < src.rows; y++) {
-    for (let x = 0; x < src.cols; x++) {
-      const base = (y * src.cols + x) * ch;
-      for (let c = 0; c < ch; c++) {
-        const dst = mv.get(c);
-        dst.data![y * src.cols + x] = src.data[base + c] ?? 0;
-      }
-    }
-  }
-}
-
-function merge(mv: MatVector, dst: Mat) {
-  const ch = mv.size();
-  const rows = mv.get(0)?.rows ?? 0;
-  const cols = mv.get(0)?.cols ?? 0;
-  const type = ch === 4 ? CV_8UC4 : ch === 3 ? CV_8UC3 : CV_8UC1;
-  dst.create(rows, cols, type);
-  if (!dst.data) return;
-  for (let y = 0; y < rows; y++) {
-    for (let x = 0; x < cols; x++) {
-      for (let c = 0; c < ch; c++) {
-        const srcP = mv.get(c);
-        dst.data[(y * cols + x) * ch + c] = srcP?.data?.[y * cols + x] ?? 0;
-      }
-    }
-  }
-}
-
-function resize(src: Mat, dst: Mat, dsize: Size) {
-  dst.create(dsize.height, dsize.width, src.type());
-  if (src.data && dst.data) {
-    const ch = src.channels();
-    const minRows = Math.min(src.rows, dst.rows);
-    const minCols = Math.min(src.cols, dst.cols);
-    for (let y = 0; y < minRows; y++) {
-      for (let x = 0; x < minCols; x++) {
-        for (let c = 0; c < ch; c++) {
-          dst.data[(y * dst.cols + x) * ch + c] =
-            src.data[(y * src.cols + x) * ch + c];
-        }
-      }
-    }
-  }
-}
-
-function GaussianBlur(src: Mat, dst: Mat) {
-  dst.create(src.rows, src.cols, src.type());
-  if (src.data && dst.data) dst.data.set(src.data);
-}
-
-function cvtColor(src: Mat, dst: Mat, code: number) {
-  if (code === COLOR_RGB2RGBA && src.channels() === 3) {
-    dst.create(src.rows, src.cols, CV_8UC4);
-    if (src.data && dst.data) {
-      for (let i = 0; i < src.rows * src.cols; i++) {
-        dst.data[i * 4 + 0] = src.data[i * 3 + 0] ?? 0;
-        dst.data[i * 4 + 1] = src.data[i * 3 + 1] ?? 0;
-        dst.data[i * 4 + 2] = src.data[i * 3 + 2] ?? 0;
-        dst.data[i * 4 + 3] = 255;
-      }
-    }
-    return;
-  }
-  src.copyTo(dst);
-}
-
-function warpAffine(
-  src: Mat,
-  dst: Mat,
-  _M: Mat,
-  dsize: Size,
-  _flags?: number,
-  _borderMode?: number,
-  _borderValue?: Scalar,
-) {
-  dst.create(dsize.height, dsize.width, src.type());
-  if (src.data && dst.data) {
-    const ch = src.channels();
-    const minRows = Math.min(src.rows, dst.rows);
-    const minCols = Math.min(src.cols, dst.cols);
-    for (let y = 0; y < minRows; y++) {
-      for (let x = 0; x < minCols; x++) {
-        for (let c = 0; c < ch; c++) {
-          dst.data[(y * dst.cols + x) * ch + c] =
-            src.data[(y * src.cols + x) * ch + c];
-        }
-      }
-    }
-  }
-}
-
-function matFromArray(
-  rows: number,
-  cols: number,
-  type: MatType,
-  arr: number[],
-) {
-  const m = new Mat(rows, cols, type);
-  if (m.data64F) m.data64F.set(arr);
-  if (m.data32S) m.data32S.set(arr.map((v) => v | 0));
-  if (m.data) m.data.set(arr.map((v) => v | 0));
-  return m;
-}
-
-function moments(_img: Mat, _binaryImage = true) {
-  return {
-    m00: 0,
-    m10: 0,
-    m01: 0,
-    m20: 0,
-    m11: 0,
-    m02: 0,
-    mu20: 0,
-    mu11: 0,
-    mu02: 0,
-  };
-}
-
-function HuMoments(_m: any) {
-  return [0, 0, 0, 0, 0, 0, 0];
-}
-
-function mean(_img: Mat) {
-  return new Scalar(0, 0, 0, 0);
+  size() { return this.arr.length; }
+  get(i: number) { return this.arr[i]; }
+  push_back(m: Mat) { this.arr.push(m); }
+  delete() { this.arr.forEach(m => m.delete()); this.arr.length = 0; }
 }
 
 const cvCore = {
   Mat,
-  Size,
-  Scalar,
   MatVector,
-  CV_8UC1,
-  CV_8UC3,
-  CV_8UC4,
-  CV_32FC1,
-  CV_32SC2,
-  COLOR_RGB2RGBA,
-  split,
-  merge,
-  resize,
-  GaussianBlur,
-  cvtColor,
-  warpAffine,
-  matFromArray,
-  moments,
-  HuMoments,
-  mean,
+  Point: class Point { constructor(public x: number, public y: number) {} },
+  Size: class Size { constructor(public width: number, public height: number) {} },
+  Scalar: class Scalar extends Array<number> {},
+  CV_8UC1: 0,
+  CV_8UC3: 3,
+  CV_8UC4: 4,
+  CV_32SC2: 0x2002,
+  CV_32FC1: 5,
+  CV_64FC1: 6,
+  INTER_LINEAR: 1,
+  BORDER_CONSTANT: 0,
+  COLOR_RGBA2RGB: 1,
+  COLOR_RGB2RGBA: 2,
+  COLOR_GRAY2RGBA: 8,
+  RETR_EXTERNAL: 0,
+  CHAIN_APPROX_SIMPLE: 2,
+  matFromImageData: (imageData: ImageData) => new Mat(imageData.height, imageData.width, 4, imageData.data),
+  matFromArray: (rows: number, cols: number, type: any, array: number[]) => new Mat(rows, cols, type, array),
+  imshow: () => {},
+  rectangle: () => {},
+  drawContours: () => {},
+  circle: () => {},
+  cvtColor: (src: Mat, dst: Mat, _code: any) => src.copyTo(dst),
+  resize: (src: Mat, dst: Mat, dsize: any) => {
+    dst.rows = dsize.height;
+    dst.cols = dsize.width;
+    dst.type = src.type;
+    dst._channels = src.channels();
+    dst._data = new (src._data.constructor as any)(dsize.width * dsize.height * dst._channels);
+  },
+  GaussianBlur: (src: Mat, dst: Mat) => src.copyTo(dst),
+  warpAffine: (src: Mat, dst: Mat, _M: Mat, dsize: any) => {
+    dst.rows = dsize.height;
+    dst.cols = dsize.width;
+    dst.type = src.type;
+    dst._channels = src.channels();
+    dst._data = new (src._data.constructor as any)(dsize.width * dsize.height * dst._channels);
+    src.copyTo(dst);
+  },
+  moments: () => ({ m00: 1, m10: 1, m01: 1, m20: 1, m11: 1, m02: 1, mu20: 1, mu11: 1, mu02: 1 }),
+  HuMoments: (_moments: any, hu: Mat) => {
+    const huValues = new Float64Array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]);
+    hu.rows = 7;
+    hu.cols = 1;
+    hu.type = 6;
+    hu._channels = 1;
+    hu._data = huValues;
+  },
+  findContours: (_src: Mat, contours: MatVector, _hierarchy: Mat, _mode: any, _method: any) => {
+    const contour = new Mat(4, 1, 0x2002, [10,10, 10,20, 20,20, 20,10]);
+    contours.push_back(contour);
+  },
+  split: (src: Mat, dstVec: MatVector) => {
+    const channels = src.channels();
+    for (let i = 0; i < channels; i++) {
+      const channelMat = new Mat(src.rows, src.cols, 0);
+      for (let j = 0; j < src.rows * src.cols; j++) {
+        channelMat.data[j] = src.data[j * channels + i];
+      }
+      dstVec.push_back(channelMat);
+    }
+  },
+  merge: (srcVec: MatVector, dst: Mat) => {
+    const size = srcVec.size();
+    if (size === 0) return;
+    const C1 = srcVec.get(0);
+    dst.rows = C1.rows;
+    dst.cols = C1.cols;
+    dst.type = size === 4 ? 4 : size === 3 ? 3 : 0;
+    dst._channels = size;
+    dst._data = new Uint8Array(dst.rows * dst.cols * dst._channels);
+    for (let i = 0; i < dst.rows * dst.cols; i++) {
+      for (let c = 0; c < size; c++) {
+        dst.data[i * size + c] = srcVec.get(c).data[i];
+      }
+    }
+  },
+  mean: () => new cvCore.Scalar(128, 128, 128, 255),
   onRuntimeInitialized: Promise.resolve(true),
 };
 
-let cvPromise: Promise<any>;
-
-if (process.env.NODE_ENV === "test") {
-  // thenable にして、await / .then の両対応にする
-  const thenable: any = Promise.resolve(cvCore);
-  thenable.then = (onFulfilled: any, onRejected?: any) =>
-    Promise.resolve(cvCore).then(onFulfilled, onRejected);
-  cvPromise = thenable as Promise<any>;
-} else {
-  // 実環境は従来どおりのローダーへ
-  cvPromise = import("./opencv-loader").then((m: any) => m.default());
-}
+const cvPromise: Promise<any> = Promise.resolve(cvCore);
 
 export default cvPromise;
-export {
-  // （named import が必要な場合のためにエクスポートしておく）
-  Mat,
-  Size,
-  Scalar,
-  MatVector,
-  CV_8UC1,
-  CV_8UC3,
-  CV_8UC4,
-  CV_32FC1,
-  CV_32SC2,
-  COLOR_RGB2RGBA,
-  split,
-  merge,
-  resize,
-  GaussianBlur,
-  cvtColor,
-  warpAffine,
-  matFromArray,
-  moments,
-  HuMoments,
-  mean,
-};

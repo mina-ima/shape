@@ -3,6 +3,7 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "node:path";
 import { VitePWA } from "vite-plugin-pwa";
+import { viteStaticCopy } from "vite-plugin-static-copy";
 
 export default defineConfig({
   plugins: [
@@ -17,7 +18,21 @@ export default defineConfig({
         maximumFileSizeToCacheInBytes: 60 * 1024 * 1024,
       },
     }),
+    viteStaticCopy({
+      targets: [
+        {
+          src: "node_modules/onnxruntime-web/dist/*.wasm",
+          dest: ".",
+        },
+      ],
+    }),
   ],
+  worker: {
+    format: "es",
+  },
+  optimizeDeps: {
+    exclude: ["onnxruntime-web"],
+  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "src"),
