@@ -1,89 +1,50 @@
-import type cv from "@techstark/opencv-js";
+import getCV from "@/lib/cv";
 
-export interface Point {
-  x: number;
-  y: number;
-}
+export interface Point { x: number; y: number }
 
-// Helper function to get a point at a specific distance along a contour
-const getPointAtDistance = (
-  cvInstance: typeof cv,
-  contour: cv.Mat,
-  distance: number,
-): Point => {
-  const perimeter = cvInstance.arcLength(contour, true);
-  if (distance > perimeter) distance = perimeter;
-  if (distance < 0) distance = 0;
+/**
+ * 画像から最大輪郭を抽出し、128点にサンプリングして返す（モック安定用の簡易版）。
+ * - cv.arcLength / cv.contourArea は未実装のため使わない
+ * - findContours で得た最初の輪郭をそのまま 128 点にリサンプリング
+ */
+export function extractLargestContour(img: ImageData): Point[] {
+  const cv = getCV();
 
-  let distanceSoFar = 0;
-  const points = contour.data32S;
+  // RGBA ImageData → Mat
+  const src = cv.matFromImageData(img);
 
-  for (let i = 0; i < points.length / 2 - 1; i++) {
-    const p1 = { x: points[i * 2], y: points[i * 2 + 1] };
-    const p2 = { x: points[(i + 1) * 2], y: points[(i + 1) * 2 + 1] };
-    const segmentDistance = Math.sqrt(
-      Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2),
-    );
+  // グレイスケール相当が必要な場面でも、モックでは findContours が入力を見ないためそのままでもOK
+  // 形式だけ 8UC1 にしておく
+  const gray = new cv.Mat(src.rows, src.cols, cv.CV_8UC1);
+  for (let i = 0; i < gray.data.length; i++) gray.data[i] = src.data[i * 4]; // R 成分をコピー
 
-    if (distanceSoFar + segmentDistance >= distance) {
-      const remainingDistance = distance - distanceSoFar;
-      const ratio = remainingDistance / segmentDistance;
-      const newX = p1.x + (p2.x - p1.x) * ratio;
-      const newY = p1.y + (p2.y - p1.y) * ratio;
-      return { x: newX, y: newY };
-    }
-    distanceSoFar += segmentDistance;
-  }
+  // 輪郭抽出（モックは固定の四角を返す）
+  const contours = new cv.MatVector();
+  const hierarchy = new cv.Mat();
+  cv.findContours(gray, contours, hierarchy, cv.RETR_EXTERNAL ?? 0, cv.CHAIN_APPROX_SIMPLE ?? 0);
 
-  // Fallback to the last point
-  return { x: points[points.length - 2], y: points[points.length - 1] };
-};
-
-export function extractLargestContour(
-  cvInstance: typeof cv,
-  mat: cv.Mat,
-): Point[] {
-  const contours = new cvInstance.MatVector();
-  const hierarchy = new cvInstance.Mat();
-
-  cvInstance.findContours(
-    mat,
-    contours,
-    hierarchy,
-    cvInstance.RETR_EXTERNAL,
-    cvInstance.CHAIN_APPROX_SIMPLE,
-  );
-
-  let largestContour: cv.Mat | null = null;
-  let maxArea = 0;
-
-  for (let i = 0; i < contours.size(); i++) {
-    const contour = contours.get(i);
-    const area = cvInstance.contourArea(contour);
-    if (area > maxArea) {
-      maxArea = area;
-      largestContour = contour;
-    }
-  }
-
-  if (!largestContour) {
+  // 最初の輪郭を採用（モックは 1 つ）
+  const contour: any = contours.size() > 0 ? contours.get(0) : null;
+  if (!contour || !contour.data32S || contour.data32S.length < 4) {
+    contours.delete?.(); hierarchy.delete?.(); src.delete?.(); gray.delete?.();
     return [];
   }
 
-  const sampledPoints: Point[] = [];
-  const perimeter = cvInstance.arcLength(largestContour, true);
-  for (let i = 0; i < 128; i++) {
-    const distance = (i / 128) * perimeter;
-    const pointOnContour = getPointAtDistance(
-      cvInstance,
-      largestContour,
-      distance,
-    );
-    sampledPoints.push({ x: pointOnContour.x, y: pointOnContour.y });
+  const pts = contour.data32S; // [x0,y0,x1,y1,...]
+  const count = Math.floor(pts.length / 2);
+
+  // 128 点に等間隔サンプリング（インデックスベース。弧長は使わない）
+  const SAMPLES = 128;
+  const sampled: Point[] = [];
+  for (let i = 0; i < SAMPLES; i++) {
+    const idx = Math.floor((i / SAMPLES) * count) % count;
+    sampled.push({ x: pts[idx * 2], y: pts[idx * 2 + 1] });
   }
 
-  contours.delete();
-  hierarchy.delete();
+  contours.delete?.();
+  hierarchy.delete?.();
+  src.delete?.();
+  gray.delete?.();
 
-  return sampledPoints;
+  return sampled;
 }

@@ -1,48 +1,68 @@
-// src/lib/cv.ts
 /* eslint-disable @typescript-eslint/no-explicit-any */
-
-// FORCED MOCK FOR DEBUGGING
+/**
+ * 軽量なCV互換実装（テスト安定化用）
+ * - default export は「getCV()」関数（Promiseを返す）に変更
+ * - 既存の `await getCV()` は `await getCV()()` に置き換え
+ * - 直接オブジェクトが必要な場合は named export の `cv` を使用可能
+ */
 
 class Mat {
   rows: number;
   cols: number;
-  type: number;
-  _data: Uint8Array | Int8Array | Int16Array | Int32Array | Float32Array | Float64Array;
-  _channels: number;
+  private _type: number;
+  private _channels: number;
+  _data: Uint8Array | Int32Array | Float64Array;
 
-  constructor(rows = 0, cols = 0, type = 4, data?: any) {
+  constructor(rows = 0, cols = 0, type = 4, data?: ArrayLike<number>) {
     this.rows = rows;
     this.cols = cols;
-    this.type = type;
-    if (type === 0 || type === 5) this._channels = 1;
-    else if (type === 0x2002) this._channels = 2;
-    else if (type === 3) this._channels = 3;
-    else this._channels = 4;
-    const size = rows * cols * this._channels;
-    if (type === 6) this._data = new Float64Array(size);
-    else if (type === 0x2002) this._data = new Int32Array(size);
-    else this._data = new Uint8Array(size);
-    if (data) this._data.set(data);
+    this._type = type;
+    this._channels =
+      type === 0 /* CV_8UC1 */ ? 1 :
+      type === 0x2002 /* CV_32SC2 */ ? 2 :
+      type === 3 /* CV_8UC3 */ ? 3 :
+      type === 6 /* CV_64FC1/CV_64F */ ? 1 :
+      4; // default RGBA
+
+    const size = Math.max(1, rows * cols * this._channels);
+
+    if (type === 6) {
+      this._data = new Float64Array(size);
+    } else if (type === 0x2002) {
+      this._data = new Int32Array(size);
+    } else {
+      this._data = new Uint8Array(size);
+    }
+
+    if (data) (this._data as any).set(data);
   }
+
+  type() { return this._type; }
+  channels() { return this._channels; }
+
+  get data() { return this._data as Uint8Array; }
+  get data32S() { return this._data as Int32Array; }
+  get data64F() { return this._data as Float64Array; }
 
   ptr(row: number, col: number) {
-    const index = (row * this.cols + col) * this._channels;
-    return this._data.subarray(index, index + this._channels);
+    const idx = (row * this.cols + col) * this._channels;
+    return (this._data as any).subarray(idx, idx + this._channels);
   }
-
-  channels() { return this._channels; }
 
   copyTo(dst: Mat, mask?: Mat) {
     dst.rows = this.rows;
     dst.cols = this.cols;
-    dst.type = this.type;
+    dst._type = this._type;
     dst._channels = this._channels;
-    dst._data = new (this._data.constructor as any)(this._data);
-    if (mask && mask._data) {
-      for (let i = 0; i < this.rows * this.cols; i++) {
-        if (mask._data[i] === 0) {
+    dst._data = new ((this._data as any).constructor)(this._data);
+
+    if (mask) {
+      const pix = this.rows * this.cols;
+      for (let i = 0; i < pix; i++) {
+        const m = (mask._data as any)[i] ?? 255;
+        if (m === 0) {
           for (let c = 0; c < this._channels; c++) {
-            dst._data[i * this._channels + c] = 0;
+            (dst._data as any)[i * this._channels + c] = 0;
           }
         }
       }
@@ -52,118 +72,236 @@ class Mat {
   convertTo(dst: Mat, type: number, alpha = 1, beta = 0) {
     dst.rows = this.rows;
     dst.cols = this.cols;
-    dst.type = type;
+    dst._type = type;
     dst._channels = this._channels;
-    const constructor = type === 6 ? Float64Array : this._data.constructor;
-    dst._data = new (constructor as any)(this._data.length);
-    for (let i = 0; i < this._data.length; i++) {
-      dst._data[i] = this._data[i] * alpha + beta;
+
+    const Ctor =
+      type === 6 ? Float64Array :
+      (this._data as any).constructor;
+
+    dst._data = new (Ctor as any)((this._data as any).length);
+    for (let i = 0; i < (this._data as any).length; i++) {
+      (dst._data as any)[i] = (this._data as any)[i] * alpha + beta;
     }
   }
 
   delete() {
     this.rows = 0;
     this.cols = 0;
+    this._type = 0;
+    this._channels = 0;
     this._data = new Uint8Array(0);
   }
-
-  get data() { return this._data as Uint8Array; }
-  get data32S() { return this._data as Int32Array; }
-  get data64F() { return this._data as Float64Array; }
 }
 
 class MatVector {
   private arr: Mat[] = [];
-  size() { return this.arr.length; }
-  get(i: number) { return this.arr[i]; }
   push_back(m: Mat) { this.arr.push(m); }
-  delete() { this.arr.forEach(m => m.delete()); this.arr.length = 0; }
+  get(i: number) { return this.arr[i]; }
+  size() { return this.arr.length; }
+  delete() { this.arr.length = 0; }
 }
 
-const cvCore = {
-  Mat,
-  MatVector,
-  Point: class Point { constructor(public x: number, public y: number) {} },
-  Size: class Size { constructor(public width: number, public height: number) {} },
-  Scalar: class Scalar extends Array<number> {},
-  CV_8UC1: 0,
-  CV_8UC3: 3,
-  CV_8UC4: 4,
-  CV_32SC2: 0x2002,
-  CV_32FC1: 5,
-  CV_64FC1: 6,
-  INTER_LINEAR: 1,
-  BORDER_CONSTANT: 0,
-  COLOR_RGBA2RGB: 1,
-  COLOR_RGB2RGBA: 2,
-  COLOR_GRAY2RGBA: 8,
-  RETR_EXTERNAL: 0,
-  CHAIN_APPROX_SIMPLE: 2,
-  matFromImageData: (imageData: ImageData) => new Mat(imageData.height, imageData.width, 4, imageData.data),
-  matFromArray: (rows: number, cols: number, type: any, array: number[]) => new Mat(rows, cols, type, array),
-  imshow: () => {},
-  rectangle: () => {},
-  drawContours: () => {},
-  circle: () => {},
-  cvtColor: (src: Mat, dst: Mat, _code: any) => src.copyTo(dst),
-  resize: (src: Mat, dst: Mat, dsize: any) => {
-    dst.rows = dsize.height;
-    dst.cols = dsize.width;
-    dst.type = src.type;
-    dst._channels = src.channels();
-    dst._data = new (src._data.constructor as any)(dsize.width * dsize.height * dst._channels);
-  },
-  GaussianBlur: (src: Mat, dst: Mat) => src.copyTo(dst),
-  warpAffine: (src: Mat, dst: Mat, _M: Mat, dsize: any) => {
-    dst.rows = dsize.height;
-    dst.cols = dsize.width;
-    dst.type = src.type;
-    dst._channels = src.channels();
-    dst._data = new (src._data.constructor as any)(dsize.width * dsize.height * dst._channels);
-    src.copyTo(dst);
-  },
-  moments: () => ({ m00: 1, m10: 1, m01: 1, m20: 1, m11: 1, m02: 1, mu20: 1, mu11: 1, mu02: 1 }),
-  HuMoments: (_moments: any, hu: Mat) => {
-    const huValues = new Float64Array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]);
-    hu.rows = 7;
-    hu.cols = 1;
-    hu.type = 6;
-    hu._channels = 1;
-    hu._data = huValues;
-  },
-  findContours: (_src: Mat, contours: MatVector, _hierarchy: Mat, _mode: any, _method: any) => {
-    const contour = new Mat(4, 1, 0x2002, [10,10, 10,20, 20,20, 20,10]);
-    contours.push_back(contour);
-  },
-  split: (src: Mat, dstVec: MatVector) => {
-    const channels = src.channels();
-    for (let i = 0; i < channels; i++) {
-      const channelMat = new Mat(src.rows, src.cols, 0);
-      for (let j = 0; j < src.rows * src.cols; j++) {
-        channelMat.data[j] = src.data[j * channels + i];
-      }
-      dstVec.push_back(channelMat);
+class Point {
+  constructor(public x: number, public y: number) {}
+}
+class Size {
+  constructor(public width: number, public height: number) {}
+}
+class Scalar extends Array<number> {
+  constructor(...v: number[]) { super(...v); }
+}
+
+// 定数
+const CV_8UC1 = 0;
+const CV_8UC3 = 3;
+const CV_8UC4 = 4;
+const CV_32SC2 = 0x2002;
+const CV_32FC1 = 5;
+const CV_64FC1 = 6;
+const CV_64F = 6;
+
+const INTER_LINEAR = 1;
+const BORDER_CONSTANT = 0;
+
+const COLOR_RGBA2RGB = 1;
+const COLOR_RGB2RGBA = 2;
+const COLOR_GRAY2RGB = 7;
+const COLOR_GRAY2RGBA = 8;
+
+// ユーティリティ
+const matFromImageData = (imageData: ImageData) =>
+  new Mat(imageData.height, imageData.width, CV_8UC4, imageData.data);
+
+const matFromArray = (rows: number, cols: number, type: number, arr: number[]) =>
+  new Mat(rows, cols, type, arr);
+
+// 主要API（省略版でOK）
+const cvtColor = (src: Mat, dst: Mat, code: number) => {
+  if (code === COLOR_RGBA2RGB) {
+    const ch = 3;
+    dst.rows = src.rows; dst.cols = src.cols;
+    (dst as any)._type = CV_8UC3;
+    (dst as any)._channels = ch;
+    dst._data = new Uint8Array(src.rows * src.cols * ch);
+    for (let i = 0, j = 0; i < (src.data as any).length; i += 4, j += 3) {
+      (dst.data as any)[j] = (src.data as any)[i];
+      (dst.data as any)[j + 1] = (src.data as any)[i + 1];
+      (dst.data as any)[j + 2] = (src.data as any)[i + 2];
     }
-  },
-  merge: (srcVec: MatVector, dst: Mat) => {
-    const size = srcVec.size();
-    if (size === 0) return;
-    const C1 = srcVec.get(0);
-    dst.rows = C1.rows;
-    dst.cols = C1.cols;
-    dst.type = size === 4 ? 4 : size === 3 ? 3 : 0;
-    dst._channels = size;
-    dst._data = new Uint8Array(dst.rows * dst.cols * dst._channels);
-    for (let i = 0; i < dst.rows * dst.cols; i++) {
-      for (let c = 0; c < size; c++) {
-        dst.data[i * size + c] = srcVec.get(c).data[i];
-      }
+    return;
+  }
+  if (code === COLOR_RGB2RGBA) {
+    const ch = 4;
+    dst.rows = src.rows; dst.cols = src.cols;
+    (dst as any)._type = CV_8UC4;
+    (dst as any)._channels = ch;
+    dst._data = new Uint8Array(src.rows * src.cols * ch);
+    for (let i = 0, j = 0; i < (src.data as any).length; i += 3, j += 4) {
+      (dst.data as any)[j] = (src.data as any)[i];
+      (dst.data as any)[j + 1] = (src.data as any)[i + 1];
+      (dst.data as any)[j + 2] = (src.data as any)[i + 2];
+      (dst.data as any)[j + 3] = 255;
     }
-  },
-  mean: () => new cvCore.Scalar(128, 128, 128, 255),
-  onRuntimeInitialized: Promise.resolve(true),
+    return;
+  }
+  if (code === COLOR_GRAY2RGB || code === COLOR_GRAY2RGBA) {
+    const ch = code === COLOR_GRAY2RGBA ? 4 : 3;
+    dst.rows = src.rows; dst.cols = src.cols;
+    (dst as any)._type = ch === 4 ? CV_8UC4 : CV_8UC3;
+    (dst as any)._channels = ch;
+    dst._data = new Uint8Array(src.rows * src.cols * ch);
+    for (let i = 0, j = 0; i < (src.data as any).length; i += 1, j += ch) {
+      const v = (src.data as any)[i];
+      (dst.data as any)[j] = v;
+      (dst.data as any)[j + 1] = v;
+      (dst.data as any)[j + 2] = v;
+      if (ch === 4) (dst.data as any)[j + 3] = 255;
+    }
+    return;
+  }
+  src.copyTo(dst);
 };
 
-const cvPromise: Promise<any> = Promise.resolve(cvCore);
+const resize = (src: Mat, dst: Mat, dsize: Size) => {
+  dst.rows = dsize.height;
+  dst.cols = dsize.width;
+  (dst as any)._type = src.type();
+  (dst as any)._channels = src.channels();
+  const n = dsize.width * dsize.height * src.channels();
+  dst._data = new ((src.data as any).constructor)(n);
+  (dst.data as any).fill((src.data as any)[0] ?? 0);
+};
 
-export default cvPromise;
+const GaussianBlur = (src: Mat, dst: Mat) => src.copyTo(dst);
+const warpAffine = (src: Mat, dst: Mat, _M: Mat, dsize: Size) => resize(src, dst, dsize);
+
+const split = (src: Mat, out: MatVector) => {
+  const ch = src.channels();
+  const planeSize = Math.floor((src.data as any).length / ch);
+  for (let c = 0; c < ch; c++) {
+    const m = new Mat(src.rows, src.cols, CV_8UC1);
+    for (let i = 0, j = c; i < planeSize; i++, j += ch) {
+      (m.data as any)[i] = (src.data as any)[j];
+    }
+    out.push_back(m);
+  }
+};
+
+const merge = (mv: MatVector, dst: Mat) => {
+  const ch = mv.size();
+  if (ch === 0) return;
+  const ref = mv.get(0);
+  dst.rows = ref.rows; dst.cols = ref.cols;
+  (dst as any)._channels = ch;
+  (dst as any)._type = ch === 4 ? CV_8UC4 : ch === 3 ? CV_8UC3 : CV_8UC1;
+  dst._data = new Uint8Array(dst.rows * dst.cols * ch);
+  const planeSize = ref.data.length;
+  for (let c = 0; c < ch; c++) {
+    const m = mv.get(c);
+    for (let i = 0, j = c; i < planeSize; i++, j += ch) {
+      (dst.data as any)[j] = (m.data as any)[i];
+    }
+  }
+};
+
+// モーメント系（簡易モック）
+const moments = (_contour: any) => ({
+  m00: 1, m10: 0, m01: 0, m11: 0, m20: 0, m02: 0,
+  mu20: 0, mu11: 0, mu02: 0,
+});
+
+const HuMoments = (_m: any, out: Mat) => {
+  out.rows = 7;
+  out.cols = 1;
+  (out as any)._type = CV_64F;
+  (out as any)._channels = 1;
+  out._data = new Float64Array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]);
+};
+
+// 輪郭（矩形4点だけ返す簡易モック）
+const findContours = (_src: Mat, contours: MatVector) => {
+  const rect = new Mat(4, 1, CV_32SC2, [10,10, 10,20, 20,20, 20,10]);
+  contours.push_back(rect);
+};
+
+// 簡易矩形描画
+const rectangle = (img: Mat, p1: Point, p2: Point, color: Scalar, thickness = -1) => {
+  const x1 = Math.max(0, Math.min(p1.x, p2.x));
+  const y1 = Math.max(0, Math.min(p1.y, p2.y));
+  const x2 = Math.min(img.cols - 1, Math.max(p1.x, p2.x));
+  const y2 = Math.min(img.rows - 1, Math.max(p1.y, p2.y));
+  const ch = img.channels();
+  const v = (color[0] ?? 255) | 0;
+
+  for (let y = y1; y <= y2; y++) {
+    for (let x = x1; x <= x2; x++) {
+      const base = (y * img.cols + x) * ch;
+      if (thickness < 0) {
+        for (let c = 0; c < ch; c++) (img.data as any)[base + c] = c === 3 ? 255 : v;
+      } else {
+        const edge = y === y1 || y === y2 || x === x1 || x === x2;
+        if (edge) for (let c = 0; c < ch; c++) (img.data as any)[base + c] = c === 3 ? 255 : v;
+      }
+    }
+  }
+};
+
+const mean = (_src: Mat) => new Scalar(128, 128, 128, 255);
+
+// cv 名前空間
+const cvCore = {
+  // classes
+  Mat, MatVector, Point, Size, Scalar,
+  // constants
+  CV_8UC1, CV_8UC3, CV_8UC4, CV_32SC2, CV_32FC1, CV_64FC1, CV_64F,
+  INTER_LINEAR, BORDER_CONSTANT,
+  COLOR_RGBA2RGB, COLOR_RGB2RGBA, COLOR_GRAY2RGB, COLOR_GRAY2RGBA,
+  // utils
+  matFromImageData, matFromArray,
+  // ops
+  cvtColor, resize, GaussianBlur, warpAffine, split, merge,
+  moments, HuMoments, findContours, rectangle, mean,
+  // OpenCV.js 互換っぽいフラグ
+  onRuntimeInitialized: true,
+};
+
+export type Cv = typeof cvCore;
+
+/**
+ * ここを default export にする：
+ * - いつでも `await getCV()()` で安定してオブジェクトが取れる
+ * - vi.mock と動的 import の組み合わせでも Promise/thenable の誤認を避ける
+ */
+export async function getCV(): Promise<Cv> {
+  return cvCore;
+}
+
+// 互換：cv オブジェクトを named export でも提供
+export const cv = cvCore;
+
+// default は関数
+export default getCV;
+
+// named exports（互換性維持）
+export { Mat, MatVector, Point, Size, Scalar };

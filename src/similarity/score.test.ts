@@ -4,6 +4,9 @@
 import { describe, it, expect, vi } from "vitest";
 import { calculateSimilarityScore } from "./score";
 import { performSimilarityCalculation } from "./scoring-logic";
+import * as cvModule from "@/lib/cv";
+
+const cv: any = (cvModule as any).default ?? cvModule;
 
 // Mock the actual calculation to control timing
 vi.mock("./scoring-logic", () => ({

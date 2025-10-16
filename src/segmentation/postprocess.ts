@@ -1,4 +1,4 @@
-import cvPromise from "@techstark/opencv-js";
+import getCV from "@techstark/opencv-js";
 
 /**
  * Applies post-processing to a raw alpha mask to clean it up.
@@ -14,7 +14,7 @@ export async function postProcessAlphaMask(
   width: number,
   height: number,
 ): Promise<Uint8ClampedArray> {
-  const cv = await cvPromise;
+  const cv = await getCV();
 
   // Create an OpenCV Mat from the input array
   const grayMat = new cv.Mat(height, width, cv.CV_8UC1);
