@@ -60,9 +60,20 @@ const PreviewScreen: React.FC<PreviewScreenProps> = ({ videoBlob }) => {
           padding: "10px 20px",
           fontSize: "1.2em",
           cursor: "pointer",
+          marginRight: "10px", // Add some spacing between buttons
         }}
       >
         保存
+      </button>
+      <button
+        onClick={() => console.log("共有ボタンがクリックされました")}
+        style={{
+          padding: "10px 20px",
+          fontSize: "1.2em",
+          cursor: "pointer",
+        }}
+      >
+        共有
       </button>
     </div>
   );
