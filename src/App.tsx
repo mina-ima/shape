@@ -2,6 +2,8 @@
 import React, { useEffect, useCallback, useState } from "react";
 import { useStore, MAX_RETRIES } from "./core/store";
 import SegmentationDemo from "./ui/SegmentationDemo";
+import licensesMarkdown from "./docs/licenses.md?raw"; // Import licenses.md as raw string
+import { marked } from "marked"; // Import marked
 
 function parseHashParams(): Record<string, string> {
   const raw = window.location.hash.startsWith("#")
@@ -22,6 +24,11 @@ const App: React.FC = () => {
   const setUnsplashApiKey = useStore((s) => s.setUnsplashApiKey);
   const startProcessFlow = useStore((s) => s.startProcessFlow);
   const reset = useStore((s) => s.reset);
+
+  const [showLicenses, setShowLicenses] = useState(false); // State for license modal visibility
+
+  // Convert markdown to HTML
+  const licensesHtml = marked(licensesMarkdown);
 
   // 「処理中…」を一瞬でも確実に見せるためのヒント
   const [processingHint, setProcessingHint] = useState(false);
@@ -53,15 +60,15 @@ const App: React.FC = () => {
 
   const handleStart = async () => {
     if (!unsplashApiKey) {
-      alert(
-        "Unsplash API Key が未設定です。URLの #unsplash_api_key=... を確認してください。",
-      );
+      useStore.setState({
+        status: "error",
+        error:
+          "Unsplash API Key が未設定です。URLの #unsplash_api_key=... を確認してください。",
+      });
       return;
     }
-    // 表示用に開始時点の解像度を固定
     setProcessingResSnapshot(processingResolution);
-    // まずは「処理中」を見せる
-    setProcessingHint(true);
+    setProcessingHint(true); // 先に true にする
     try {
       await startProcessFlow();
     } finally {
@@ -86,6 +93,15 @@ const App: React.FC = () => {
     <div
       style={{ maxWidth: 720, margin: "40px auto", fontFamily: "system-ui" }}
     >
+      {(() => {
+        console.log(
+          "App Render: status=",
+          status,
+          "isProcessingUI=",
+          isProcessingUI,
+        );
+        return null;
+      })()}
       <h1>shape</h1>
 
       <section style={{ marginBottom: 16 }}>
@@ -108,7 +124,10 @@ const App: React.FC = () => {
         <div>
           <strong>Status:</strong> {status}
           {status === "error" && (
-            <span style={{ color: "red" }}> — {error ?? "unknown error"}</span>
+            <span style={{ color: "#CC0000" }}>
+              {" "}
+              — {error ?? "unknown error"}
+            </span>
           )}
           {status === "success" && (
             <span style={{ color: "green" }}>
@@ -176,7 +195,11 @@ const App: React.FC = () => {
       {!isProcessingUI && status === "error" && (
         <div style={{ marginTop: 16 }}>
           <h3>エラー</h3>
-          {error && <p>{error}</p>}
+          {error && (
+            <p data-testid="error-message" style={{ color: "#CC0000" }}>
+              {error}
+            </p>
+          )}
           <button onClick={reset}>リトライ</button>
         </div>
       )}
@@ -185,6 +208,65 @@ const App: React.FC = () => {
         例：<code>http://localhost:4173/#unsplash_api_key=YOUR_KEY</code>{" "}
         の形式で開けば自動設定されます。
       </p>
+
+      <button
+        onClick={() => setShowLicenses(true)}
+        style={{
+          marginTop: "20px",
+          padding: "8px 16px",
+          borderRadius: 8,
+          border: "1px solid #ccc",
+          background: "#f0f0f0",
+          color: "#333",
+          cursor: "pointer",
+        }}
+      >
+        Licenses
+      </button>
+
+      {showLicenses && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            width: "100%",
+            height: "100%",
+            backgroundColor: "rgba(0, 0, 0, 0.8)",
+            display: "flex",
+            justifyContent: "center",
+            alignItems: "center",
+            zIndex: 2000,
+          }}
+        >
+          <div
+            data-testid="licenses-modal-content"
+            style={{
+              backgroundColor: "white",
+              padding: "20px",
+              borderRadius: "8px",
+              maxWidth: "80%",
+              maxHeight: "80%",
+              overflowY: "auto",
+              color: "#333",
+            }}
+          >
+            <button
+              onClick={() => setShowLicenses(false)}
+              style={{
+                float: "right",
+                background: "none",
+                border: "none",
+                fontSize: "1.2em",
+                cursor: "pointer",
+              }}
+            >
+              &times;
+            </button>
+            <div dangerouslySetInnerHTML={{ __html: licensesHtml }} />
+          </div>
+        </div>
+      )}
     </div>
   );
 };
