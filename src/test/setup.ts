@@ -1,6 +1,7 @@
 // src/test/setup.ts
 import "@testing-library/jest-dom";
 import { vi } from "vitest";
+import "fake-indexeddb/auto";
 
 /* -------------------------------------------
  * Polyfills
@@ -89,6 +90,22 @@ if (!(globalThis as any).AudioContext) {
       return { connect() {}, gain: { value: 0 } };
     }
     destination = {};
+  };
+}
+
+// Blob constructor mock for fake-indexeddb
+if (typeof Blob === "undefined") {
+  (globalThis as any).Blob = class Blob {
+    data: any[];
+    type: string;
+    constructor(data: any[], type: string) {
+      this.data = data;
+      this.type = type;
+    }
+
+    async text(): Promise<string> {
+      return this.data.join("");
+    }
   };
 }
 
