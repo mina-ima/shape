@@ -1,118 +1,155 @@
-import cv from "@techstark/opencv-js";
-import { extractLargestContour } from "./contour";
-import { calculateHuMoments, calculateEFD } from "./descriptors";
+// src/similarity/scoring-logic.ts
+import type { Cv } from "@/lib/cv";
 
-// Helper to convert ImageData to OpenCV Mat
-const imageDataToMat = (
-  cvInstance: typeof cv,
-  imageData: ImageData,
-): cv.Mat => {
-  return cvInstance.matFromImageData(imageData);
-};
+/** マスクのαを採用する閾値 */
+const ALPHA_ON = 128;
 
-// Helper to convert mask ImageData to a single-channel Mat for contour extraction
-const maskImageDataToMat = (
-  cvInstance: typeof cv,
-  maskData: ImageData,
-): cv.Mat => {
-  const mat = cvInstance.matFromImageData(maskData);
-  const grayMat = new cv.Mat();
-  cvInstance.cvtColor(mat, grayMat, cvInstance.COLOR_RGBA2GRAY);
-  mat.delete();
-  return grayMat;
-};
+/** （マスク考慮で）完全一致かどうかを先に判定 */
+function isExactlyEqual(
+  a: ImageData,
+  b: ImageData,
+  mask?: ImageData,
+): boolean {
+  if (a.width !== b.width || a.height !== b.height) return false;
 
-// Helper for cosine similarity
-const cosineSimilarity = (vec1: number[], vec2: number[]): number => {
-  const dotProduct = vec1.reduce((sum, val, i) => sum + val * vec2[i], 0);
-  const magnitude1 = Math.sqrt(vec1.reduce((sum, val) => sum + val * val, 0));
-  const magnitude2 = Math.sqrt(vec2.reduce((sum, val) => sum + val * val, 0));
-  if (magnitude1 === 0 || magnitude2 === 0) return 0; // Avoid division by zero
-  return dotProduct / (magnitude1 * magnitude2);
-};
+  const ad = a.data;
+  const bd = b.data;
 
-// Helper for Euclidean distance (norm)
-const euclideanDistance = (vec1: number[], vec2: number[]): number => {
-  const sumOfSquares = vec1.reduce(
-    (sum, val, i) => sum + Math.pow(val - vec2[i], 2),
-    0,
-  );
-  return Math.sqrt(sumOfSquares);
-};
+  let ma: Uint8ClampedArray | null = null;
+  let maskUsable = false;
 
+  if (mask && mask.width === a.width && mask.height === a.height) {
+    ma = mask.data;
+    for (let i = 3; i < ma.length; i += 4) {
+      if (ma[i] > 0) {
+        maskUsable = true;
+        break;
+      }
+    }
+  }
+
+  const N = a.width * a.height;
+  let considered = 0;
+  for (let i = 0; i < N; i++) {
+    if (maskUsable) {
+      const alpha = ma![i * 4 + 3] ?? 0;
+      if (alpha < ALPHA_ON) continue;
+    }
+    const o = i * 4;
+    // RGBA 完全一致で判定（輝度化前に厳密一致を見る）
+    if (
+      ad[o] !== bd[o] ||
+      ad[o + 1] !== bd[o + 1] ||
+      ad[o + 2] !== bd[o + 2] ||
+      ad[o + 3] !== bd[o + 3]
+    ) {
+      return false;
+    }
+    considered++;
+  }
+
+  // マスクで 0px しか見なかった場合は「マスク無しで」厳密一致を再判定
+  if (considered === 0 && maskUsable) {
+    return isExactlyEqual(a, b, undefined);
+  }
+
+  // 1px も比較できない（極端なケース）は「等しい」とみなして 1 に倒す
+  return considered === 0 ? true : true;
+}
+
+/**
+ * 画素コサイン類似度（マスク対応）
+ * - マスクは RGBA の α を参照（α>=128 を採用）。
+ * - マスクに有効ピクセルが 1つも無い場合は、マスクを無視して再計算。
+ * - 分母が 0 になる退化ケースは 0 を返す（厳密一致は isExactlyEqual 側で 1 に吸収）。
+ */
+function pixelCosineImageData(
+  fg: ImageData,
+  bg: ImageData,
+  mask?: ImageData,
+): number {
+  if (fg.width !== bg.width || fg.height !== bg.height) return 0;
+
+  const fa = fg.data;
+  const ba = bg.data;
+
+  // マスクが「サイズ一致」かつ「α>0 が存在」する場合のみ有効化
+  let maskUsable = false;
+  let ma: Uint8ClampedArray | null = null;
+  if (mask && mask.width === fg.width && mask.height === fg.height) {
+    ma = mask.data;
+    for (let i = 3; i < ma.length; i += 4) {
+      if (ma[i] > 0) {
+        maskUsable = true;
+        break;
+      }
+    }
+  }
+
+  let dot = 0;
+  let na = 0;
+  let nb = 0;
+  let used = 0;
+
+  const N = fg.width * fg.height;
+  for (let i = 0; i < N; i++) {
+    if (maskUsable) {
+      const a = ma![i * 4 + 3] ?? 0; // マスクのα
+      if (a < ALPHA_ON) continue; // ほぼ透明は無視
+    }
+
+    // RGB → 輝度（グレイスケール）へ
+    const r1 = fa[i * 4] ?? 0,
+      g1 = fa[i * 4 + 1] ?? 0,
+      b1 = fa[i * 4 + 2] ?? 0;
+    const r2 = ba[i * 4] ?? 0,
+      g2 = ba[i * 4 + 1] ?? 0,
+      b2 = ba[i * 4 + 2] ?? 0;
+
+    const y1 = (0.299 * r1 + 0.587 * g1 + 0.114 * b1) / 255;
+    const y2 = (0.299 * r2 + 0.587 * g2 + 0.114 * b2) / 255;
+
+    dot += y1 * y2;
+    na += y1 * y1;
+    nb += y2 * y2;
+    used++;
+  }
+
+  // マスク適用により 1px も比較できなかった → マスク無しで再計算
+  if (used === 0 && maskUsable) {
+    return pixelCosineImageData(fg, bg, undefined);
+  }
+
+  if (used === 0 || na === 0 || nb === 0) return 0;
+
+  const sim = dot / (Math.sqrt(na) * Math.sqrt(nb));
+  if (!Number.isFinite(sim)) return 0;
+  return Math.max(0, Math.min(1, sim));
+}
+
+/**
+ * 画像類似度のメイン関数
+ * - まず厳密一致チェック（マスク考慮）で早期に 1 を返す
+ * - それ以外はコサイン類似度
+ * - 依存注入の `cvInstance` は将来拡張用（現状未使用）
+ */
 export async function performSimilarityCalculation(
-  cvInstance: typeof cv,
+  _cvInstance: Cv,
   foregroundImage: ImageData,
   backgroundImage: ImageData,
   foregroundMask: ImageData,
 ): Promise<number> {
-  // Convert ImageData to Mat
-  const fgMat = imageDataToMat(cvInstance, foregroundImage);
-  const bgMat = imageDataToMat(cvInstance, backgroundImage);
-  const fgMaskMat = maskImageDataToMat(cvInstance, foregroundMask);
-
-  // Apply Canny edge detection
-  const fgCanny = new cvInstance.Mat();
-  const bgCanny = new cvInstance.Mat();
-  cvInstance.Canny(fgMat, fgCanny, 50, 100);
-  cvInstance.Canny(bgMat, bgCanny, 50, 100);
-
-  // Extract largest contours
-  const fgContourPoints = await extractLargestContour(cvInstance, fgCanny);
-  const bgContourPoints = await extractLargestContour(cvInstance, bgCanny);
-
-  if (fgContourPoints.length === 0 || bgContourPoints.length === 0) {
-    // Clean up and return 0 if no contours found
-    fgMat.delete();
-    bgMat.delete();
-    fgMaskMat.delete();
-    fgCanny.delete();
-    bgCanny.delete();
-    return 0;
+  // 1) 厳密一致なら 1
+  if (isExactlyEqual(foregroundImage, backgroundImage, foregroundMask)) {
+    return 1;
   }
-
-  // Convert contour points back to cv.Mat for Hu Moments and EFD
-  const fgContourMat = cvInstance.matFromArray(
-    fgContourPoints.length,
-    1,
-    cvInstance.CV_32SC2,
-    fgContourPoints.flatMap((p) => [p.x, p.y]),
+  // 2) コサイン類似度
+  return pixelCosineImageData(
+    foregroundImage,
+    backgroundImage,
+    foregroundMask,
   );
-  const bgContourMat = cvInstance.matFromArray(
-    bgContourPoints.length,
-    1,
-    cvInstance.CV_32SC2,
-    bgContourPoints.flatMap((p) => [p.x, p.y]),
-  );
-
-  // Calculate Hu Moments
-  const fgHuMoments = calculateHuMoments(cvInstance, fgContourMat);
-  const bgHuMoments = calculateHuMoments(cvInstance, bgContourMat);
-
-  // Calculate EFD (using 10 harmonics as an example)
-  const numHarmonics = 10;
-  const fgEFD = calculateEFD(cvInstance, fgContourMat, numHarmonics);
-  const bgEFD = calculateEFD(cvInstance, bgContourMat, numHarmonics);
-
-  // Calculate scores
-  const w1 = 0.7; // Weight for EFD (shape similarity)
-  const w2 = 0.3; // Weight for Hu Moments (global shape characteristics)
-
-  const efdSimilarity = cosineSimilarity(fgEFD, bgEFD);
-  const huMomentDistance = euclideanDistance(fgHuMoments, bgHuMoments);
-
-  const normalizedHuDistance = 1 / (1 + huMomentDistance);
-
-  const score = w1 * efdSimilarity + w2 * normalizedHuDistance;
-
-  // Clean up OpenCV Mats
-  fgMat.delete();
-  bgMat.delete();
-  fgMaskMat.delete();
-  fgCanny.delete();
-  bgCanny.delete();
-  fgContourMat.delete();
-  bgContourMat.delete();
-
-  return score;
 }
+
+// テストで直接使いたい時用にエクスポート
+export { pixelCosineImageData, isExactlyEqual };

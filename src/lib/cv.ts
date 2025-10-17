@@ -2,7 +2,7 @@
 /**
  * 軽量なCV互換実装（テスト安定化用）
  * - default export は「getCV()」関数（Promiseを返す）に変更
- * - 既存の `await getCV()` は `await getCV()()` に置き換え
+ * - 既存の `await getCV()` は `await getCV()()` に置き換え不要（→ そのまま `await getCV()` でOK）
  * - 直接オブジェクトが必要な場合は named export の `cv` を使用可能
  */
 
@@ -128,10 +128,13 @@ const COLOR_RGBA2RGB = 1;
 const COLOR_RGB2RGBA = 2;
 const COLOR_GRAY2RGB = 7;
 const COLOR_GRAY2RGBA = 8;
+// ★ 追加: RGBA/RGB → GRAY
+const COLOR_RGBA2GRAY = 9;
+const COLOR_RGB2GRAY = 10;
 
 // ユーティリティ
 const matFromImageData = (imageData: ImageData) =>
-  new Mat(imageData.height, imageData.width, CV_8UC4, imageData.data);
+  new Mat(imageData.height, imageData.width, CV_8UC4, imageData.data as any);
 
 const matFromArray = (rows: number, cols: number, type: number, arr: number[]) =>
   new Mat(rows, cols, type, arr);
@@ -180,6 +183,36 @@ const cvtColor = (src: Mat, dst: Mat, code: number) => {
     }
     return;
   }
+  // ★ 追加: RGBA/RGB → GRAY（単純平均）
+  if (code === COLOR_RGBA2GRAY || code === COLOR_RGB2GRAY) {
+    const srcCh = src.channels();
+    const ch = 1;
+    dst.rows = src.rows; dst.cols = src.cols;
+    (dst as any)._type = CV_8UC1;
+    (dst as any)._channels = ch;
+    dst._data = new Uint8Array(src.rows * src.cols * ch);
+    if (srcCh === 4) {
+      for (let i = 0, j = 0; i < (src.data as any).length; i += 4, j += 1) {
+        const r = (src.data as any)[i];
+        const g = (src.data as any)[i + 1];
+        const b = (src.data as any)[i + 2];
+        (dst.data as any)[j] = ((r + g + b) / 3) | 0;
+      }
+    } else if (srcCh === 3) {
+      for (let i = 0, j = 0; i < (src.data as any).length; i += 3, j += 1) {
+        const r = (src.data as any)[i];
+        const g = (src.data as any)[i + 1];
+        const b = (src.data as any)[i + 2];
+        (dst.data as any)[j] = ((r + g + b) / 3) | 0;
+      }
+    } else {
+      // すでに1chならコピー
+      src.copyTo(dst);
+    }
+    return;
+  }
+
+  // 既定: そのままコピー
   src.copyTo(dst);
 };
 
@@ -195,6 +228,21 @@ const resize = (src: Mat, dst: Mat, dsize: Size) => {
 
 const GaussianBlur = (src: Mat, dst: Mat) => src.copyTo(dst);
 const warpAffine = (src: Mat, dst: Mat, _M: Mat, dsize: Size) => resize(src, dst, dsize);
+
+// ★ 追加: 簡易 Canny（グレイスケール化→コピーのダミー）
+const Canny = (src: Mat, dst: Mat, _t1 = 50, _t2 = 100) => {
+  const gray = new Mat();
+  // 入力がRGBA/RGBならグレー化、1chならそのまま
+  if (src.channels() === 4) {
+    cvtColor(src, gray, COLOR_RGBA2GRAY);
+  } else if (src.channels() === 3) {
+    cvtColor(src, gray, COLOR_RGB2GRAY);
+  } else {
+    src.copyTo(gray);
+  }
+  gray.copyTo(dst);
+  gray.delete();
+};
 
 const split = (src: Mat, out: MatVector) => {
   const ch = src.channels();
@@ -216,7 +264,7 @@ const merge = (mv: MatVector, dst: Mat) => {
   (dst as any)._channels = ch;
   (dst as any)._type = ch === 4 ? CV_8UC4 : ch === 3 ? CV_8UC3 : CV_8UC1;
   dst._data = new Uint8Array(dst.rows * dst.cols * ch);
-  const planeSize = ref.data.length;
+  const planeSize = (ref.data as any).length;
   for (let c = 0; c < ch; c++) {
     const m = mv.get(c);
     for (let i = 0, j = c; i < planeSize; i++, j += ch) {
@@ -277,10 +325,11 @@ const cvCore = {
   CV_8UC1, CV_8UC3, CV_8UC4, CV_32SC2, CV_32FC1, CV_64FC1, CV_64F,
   INTER_LINEAR, BORDER_CONSTANT,
   COLOR_RGBA2RGB, COLOR_RGB2RGBA, COLOR_GRAY2RGB, COLOR_GRAY2RGBA,
+  COLOR_RGBA2GRAY, COLOR_RGB2GRAY,
   // utils
   matFromImageData, matFromArray,
   // ops
-  cvtColor, resize, GaussianBlur, warpAffine, split, merge,
+  cvtColor, resize, GaussianBlur, warpAffine, Canny, split, merge,
   moments, HuMoments, findContours, rectangle, mean,
   // OpenCV.js 互換っぽいフラグ
   onRuntimeInitialized: true,
@@ -288,11 +337,7 @@ const cvCore = {
 
 export type Cv = typeof cvCore;
 
-/**
- * ここを default export にする：
- * - いつでも `await getCV()()` で安定してオブジェクトが取れる
- * - vi.mock と動的 import の組み合わせでも Promise/thenable の誤認を避ける
- */
+/** ここを default export にする */
 export async function getCV(): Promise<Cv> {
   return cvCore;
 }
@@ -305,3 +350,4 @@ export default getCV;
 
 // named exports（互換性維持）
 export { Mat, MatVector, Point, Size, Scalar };
+

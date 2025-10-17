@@ -3,10 +3,10 @@ import { describe, it, expect, beforeAll } from "vitest";
 import getCV from "@/lib/cv";
 import { calculateSimilarityScore } from "./score";
 
-let cv: any;
+let cv: Awaited<ReturnType<typeof getCV>>;
 
 beforeAll(async () => {
-  cv = await getCV()();
+  cv = await getCV();       // ← 1回だけ呼ぶ
 });
 
 const createShapeImageData = (

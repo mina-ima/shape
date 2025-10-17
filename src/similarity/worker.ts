@@ -8,11 +8,12 @@ type CvModule = { default: typeof cv };
 
 const initialize = () => {
   if (!getCV) {
-    // Wrap the 'thenable' cv object in a standard Promise to ensure compatibility
-    getCV = Promise.resolve(cv).then((cvModule) => {
-      // The resolved value might be the module itself, or a module with a default export
-      return (cvModule as unknown as CvModule).default || cvModule;
-    });
+    // thenable誤認を避けるため、.thenは使わずasync IIFEで正規化
+    getCV = (async () => {
+      const mod = cv as unknown as CvModule | typeof cv;
+      // default有無を吸収してcvインスタンスを返す
+      return (mod as CvModule).default ?? (mod as typeof cv);
+    })();
   }
   return getCV;
 };

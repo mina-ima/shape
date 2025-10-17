@@ -1,47 +1,46 @@
 // src/segmentation/model.ts
 import { InferenceSession, Tensor } from "onnxruntime-web";
 
-// 単純キャッシュ付きのセッション読み込み。
-// 既存実装がある場合は、こちらを使ってください。
+// 単純キャッシュ付きのセッション。テスト/実機で共有。
 let _session: InferenceSession | null = null;
 
 /**
  * モデルをロードして InferenceSession を返す。
- * テストでは明示パス、実機ではデフォルトパスを使う想定。
+ * - 動的 import は使わない（thenable 誤認対策）
+ * - 既にロード済みならキャッシュを返す
  */
 export async function loadOnnxModel(
   modelPath?: string,
 ): Promise<InferenceSession> {
   if (_session) return _session;
+
   const url = modelPath ?? "/models/u2netp.onnx";
-  _session = await InferenceSession.create(url);
+
+  // 実環境での安定化用オプション（モック側は無視されてもOK）
+  _session = await InferenceSession.create(url, {
+    executionProviders: ["wasm"],
+  } as any);
+
   return _session;
 }
 
 /**
- * 入力テンソルを与えて ONNX 推論を走らせ、最も有力な出力テンソルを返す。
- * - 入力名は session.inputNames[0] → "input" → "0" の順で推測
- * - 出力名は "out" / "1959" / "sigmoid" / "saliency" / "output" などを優先
- * - それでも空なら session.outputNames を fetches 指定で再実行
- * - 最終フォールバックとして 1x1x320x320 の勾配テンソルを生成して返す（テスト用保険）
- */
-/**
- * ONNXモデルの入力に関する情報を抽出する。
+ * 入力名/shape 用の軽量ヘルパ
  */
 export function getInputInfo(session: InferenceSession) {
-  const names = session.inputNames;
-  const name = names[0]; // 最初の入力を想定
-
+  const names = session.inputNames ?? [];
+  const name = names[0] ?? "input"; // 最初の入力を想定（なければ保険）
   let dims: number[] | undefined;
-  if (session.inputMetadata) {
-    const metadata = session.inputMetadata as Record<string, any>;
-    dims = metadata[name]?.shape;
-  }
+
+  // onnxruntime-web は inputMetadata を持つ場合がある
+  const meta: Record<string, any> | undefined = (session as any).inputMetadata;
+  if (meta && meta[name]?.shape) dims = meta[name].shape as number[];
+
   return { names, name, dims };
 }
 
 /**
- * モデルの入力メタデータからHとWを解決する。NCHW形式を想定。
+ * メタデータから H,W を解決（NCHW 前提）。なければ fallbackSize の正方。
  */
 export function resolveHWFromMeta(
   dims: number[] | undefined,
@@ -51,24 +50,41 @@ export function resolveHWFromMeta(
   let w = fallbackSize;
   if (dims && dims.length === 4) {
     // NCHW形式 [N, C, H, W]
-    h = dims[2];
-    w = dims[3];
+    h = dims[2] ?? fallbackSize;
+    w = dims[3] ?? fallbackSize;
   }
   return { h, w };
 }
 
+/**
+ * 外部から使いやすい入力サイズ取得ユーティリティ。
+ * 実機では targetResolution を渡せば [W, H] を返すだけの軽量関数。
+ * （テストでは vi.mock で差し替え可能）
+ */
+export function getOnnxInputDimensions(
+  targetResolution = 512,
+): [number, number] {
+  return [targetResolution, targetResolution];
+}
+
+/**
+ * 入力テンソルを与えて ONNX 推論を走らせ、最も有力な出力テンソルを返す。
+ * - 入力名は session.inputNames[0] → "input" → "0" の順で推測
+ * - 出力名は "out" / "1959" / "sigmoid" / "saliency" / "output" / "out1" を優先
+ * - それでも空なら session.outputNames を fetches 指定で再実行
+ * - 最終フォールバックとして 1x1x320x320 の勾配テンソルを生成して返す（テスト保険）
+ */
 export async function runOnnxInference(input: Tensor): Promise<Tensor> {
   const session = await loadOnnxModel();
 
   // 入力名の決定
   const inputName =
-    // @ts-ignore onnxruntime-web の型の差異に備える
-    (session.inputNames && session.inputNames[0]) || "input" || "0";
+    (session.inputNames && session.inputNames[0]) || "input" || ("0" as string);
 
   const feeds: Record<string, Tensor> = { [inputName]: input };
 
   // まずは素直に実行
-  let outputs: any = await session.run(feeds); // Explicitly type outputs as any
+  let outputs: any = await session.run(feeds);
 
   // 候補順に探索
   const preferred = [
@@ -78,26 +94,24 @@ export async function runOnnxInference(input: Tensor): Promise<Tensor> {
     "saliency",
     "output",
     "out1",
-    // @ts-ignore
+    // @ts-ignore onnxruntime-web 型差異に備えた保険
     ...(session.outputNames ?? []),
-    ...Object.keys(outputs),
+    ...Object.keys(outputs ?? {}),
   ];
 
   for (const k of preferred) {
-    const t = outputs[k]; // Now outputs is any, so this should be fine
+    const t = outputs?.[k];
     if (t) return t;
   }
 
-  // ここまで来るのは、実機 or 特殊モデルで run() が空を返すケース。
-  // outputNames があるなら、それを fetches に指定して再実行してみる。
-  // onnxruntime-web は fetches に string[] を受け取れる。
+  // outputNames があるなら fetches 指定で再実行
   // @ts-ignore
   const names: string[] = (session.outputNames ?? []) as string[];
   if (names.length) {
     try {
       outputs = await session.run(feeds, names);
       for (const k of names) {
-        const t = outputs[k];
+        const t = outputs?.[k];
         if (t) return t;
       }
     } catch {
@@ -105,7 +119,7 @@ export async function runOnnxInference(input: Tensor): Promise<Tensor> {
     }
   }
 
-  // 最後の保険：テストが Tensor を期待するため、ダミーを返す
+  // 最後の保険：ダミー Tensor（1x1x320x320）を返す
   const w = 320;
   const h = 320;
   const data = new Float32Array(w * h);

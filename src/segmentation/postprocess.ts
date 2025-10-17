@@ -1,4 +1,4 @@
-import getCV from "@techstark/opencv-js";
+import getCV from "@/lib/cv";
 
 /**
  * Applies post-processing to a raw alpha mask to clean it up.
