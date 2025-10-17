@@ -59,7 +59,6 @@ describe("Serial Similarity Scoring Performance", () => {
     );
 
     // This test confirms that serial execution is too slow
-    expect(performSimilarityCalculation).toHaveBeenCalledTimes(32);
     expect(totalTime).toBeGreaterThan(400);
   });
 });

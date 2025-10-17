@@ -59,39 +59,82 @@ function iou(a: Uint8Array, b: Uint8Array): number {
  * - backgroundImage: 候補画像（RGBA）
  * - foregroundMask: ターゲットの前景マスク（RGBA, ただしRGBで判定）
  */
+import { performSimilarityCalculation } from "./scoring-logic";
+
+// WorkerFactory の型定義
+type WorkerFactory = () => Worker;
+
+// デフォルトの WorkerFactory (ブラウザの Worker を使用)
+let workerFactory: WorkerFactory = () => new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
+
+/**
+ * Web Worker のファクトリ関数を差し替える (テスト用)
+ * @param factory 新しいファクトリ関数
+ */
+export function setWorkerFactory(factory: WorkerFactory) {
+  workerFactory = factory;
+}
+
+// ... 既存のコード ...
+
 export async function calculateSimilarityScore(
   foregroundImage: ImageData,
   backgroundImage: ImageData,
   foregroundMask: ImageData,
 ): Promise<number> {
-  // 事前に二値化
-  const binTarget = rgbBinary(foregroundImage);
-  const binCandidate = rgbBinary(backgroundImage);
-  const binMask = rgbBinary(foregroundMask);
+  // performSimilarityCalculation を呼び出す
+  return performSimilarityCalculation(
+    foregroundImage,
+    backgroundImage,
+    foregroundMask,
+  );
+}
 
-  const fgTarget = hasForeground(binTarget);
-  const fgCand = hasForeground(binCandidate);
+/**
+ * 複数の背景画像に対して並列で類似度スコアを計算する。
+ * @param foregroundImage 前景画像
+ * @param backgroundImages 背景画像の配列
+ * @param foregroundMask 前景マスク
+ * @returns 各背景画像に対する類似度スコアの配列
+ */
+export async function scoreImagesInParallel(
+  foregroundImage: ImageData,
+  backgroundImages: ImageData[],
+  foregroundMask: ImageData,
+): Promise<number[]> {
+  const numWorkers = navigator.hardwareConcurrency || 4; // 利用可能なコア数、またはデフォルト4
+  const workers: Worker[] = [];
+  const results: Promise<number>[] = [];
 
-  // --- 1) perfect：target==candidate かつ 両者に前景あり ---
-  const targetEqCand =
-    equalRGBA(foregroundImage, backgroundImage) || equalBinary(binTarget, binCandidate);
-  if (targetEqCand && fgTarget && fgCand) {
-    return 1; // perfect only
+  for (let i = 0; i < numWorkers; i++) {
+    workers.push(workerFactory());
   }
 
-  // --- 2) 非 perfect：IoU（mask vs candidate）---
-  let score = iou(binMask, binCandidate);
+  // 各 Worker に画像を分配して処理させる
+  for (let i = 0; i < backgroundImages.length; i++) {
+    const workerIndex = i % numWorkers;
+    const worker = workers[workerIndex];
 
-  // --- 3) タイブレーク：非 perfect の 1.0 相当は 0.998 に丸める ---
-  //   a) mask と candidate が完全一致（二値）
-  //   b) IoU が 1 に非常に近い（丸め誤差含む）
-  if (equalBinary(binMask, binCandidate) || score >= 1 - EPS) {
-    score = NON_PERFECT_CAP;
+    results.push(new Promise((resolve, reject) => {
+      worker.onmessage = (event) => {
+        resolve(event.data.score);
+      };
+      worker.onerror = (error) => {
+        reject(error);
+      };
+      worker.postMessage({
+        foregroundImage,
+        backgroundImage: backgroundImages[i],
+        foregroundMask,
+      });
+    }));
   }
 
-  // クランプ
-  if (score < 0) score = 0;
-  if (score > 1) score = 1;
+  // すべての Worker の処理が完了するのを待つ
+  const scores = await Promise.all(results);
 
-  return score;
+  // Worker を終了
+  workers.forEach(worker => worker.terminate());
+
+  return scores;
 }
