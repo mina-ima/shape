@@ -19,10 +19,10 @@ if (typeof (globalThis as any).ImageData === "undefined") {
     width: number;
     height: number;
     data: Uint8ClampedArray;
-    constructor(width: number, height: number) {
+    constructor(data: Uint8ClampedArray, width: number, height: number) {
       this.width = width;
       this.height = height;
-      this.data = new Uint8ClampedArray(width * height * 4);
+      this.data = data;
     }
   };
 }
