@@ -1,4 +1,4 @@
-import getCV from "@/lib/cv";
+import loadOpenCV from "@/lib/opencv-loader";
 
 /**
  * Applies post-processing to a raw alpha mask to clean it up.
@@ -14,31 +14,31 @@ export async function postProcessAlphaMask(
   width: number,
   height: number,
 ): Promise<Uint8ClampedArray> {
-  const cv = await getCV();
+  const cv = await loadOpenCV();
 
   // Create an OpenCV Mat from the input array
   const grayMat = new cv.Mat(height, width, cv.CV_8UC1);
   grayMat.data.set(alphaMask);
 
   // Morphological Opening (erosion followed by dilation) to remove small objects
-  const openKernel = cv.Mat.ones(3, 3, cv.CV_8U);
+  const openKernel = cv.Mat.ones(3, 3, cv.CV_8UC1);
   const openedMat = new cv.Mat();
   cv.morphologyEx(grayMat, openedMat, cv.MORPH_OPEN, openKernel);
 
   // Morphological Closing (dilation followed by erosion) to close small holes
-  const closeKernel = cv.Mat.ones(7, 7, cv.CV_8U); // Larger kernel for closing
+  const closeKernel = cv.Mat.ones(7, 7, cv.CV_8UC1); // Larger kernel for closing
   const closedMat = new cv.Mat();
   cv.morphologyEx(openedMat, closedMat, cv.MORPH_CLOSE, closeKernel);
 
   // Dilation to slightly enlarge the mask
   const dilatedMat = new cv.Mat();
-  const dilateKernel = cv.Mat.ones(3, 3, cv.CV_8U);
+  const dilateKernel = cv.Mat.ones(3, 3, cv.CV_8UC1);
   cv.dilate(closedMat, dilatedMat, dilateKernel);
 
   // Apply Gaussian blur for feathering (e.g., 5px)
   const featheredMat = new cv.Mat();
   const ksize = new cv.Size(5, 5);
-  cv.GaussianBlur(dilatedMat, featheredMat, ksize, 0, 0, cv.BORDER_DEFAULT);
+  cv.GaussianBlur(dilatedMat, featheredMat, ksize, 0);
 
   const outputMask = new Uint8ClampedArray(featheredMat.data);
 

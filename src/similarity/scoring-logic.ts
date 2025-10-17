@@ -1,5 +1,5 @@
 // src/similarity/scoring-logic.ts
-import type { Cv } from "@/lib/cv";
+import type CV from "@techstark/opencv-js";
 
 /** マスクのαを採用する閾値 */
 const ALPHA_ON = 128;
@@ -134,7 +134,7 @@ function pixelCosineImageData(
  * - 依存注入の `cvInstance` は将来拡張用（現状未使用）
  */
 export async function performSimilarityCalculation(
-  _cvInstance: Cv,
+  _cvInstance: typeof CV,
   foregroundImage: ImageData,
   backgroundImage: ImageData,
   foregroundMask: ImageData,

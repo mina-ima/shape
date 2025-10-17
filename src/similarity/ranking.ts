@@ -1,5 +1,5 @@
 // src/similarity/ranking.ts
-import getCV from "@/lib/cv";
+import loadOpenCV from "@/lib/opencv-loader";
 import { performSimilarityCalculation } from "./scoring-logic";
 
 /**
@@ -12,7 +12,7 @@ export async function rankBackgrounds(
   foregroundMask: ImageData,
 ): Promise<Array<{ index: number; score: number }>> {
   // モジュール（名前空間オブジェクト）を await しないよう、常に getCV() を await して実体を取得
-  const cv = await getCV();
+  const cv = await loadOpenCV();
 
   const scores: number[] = [];
   for (let i = 0; i < backgroundImages.length; i++) {
