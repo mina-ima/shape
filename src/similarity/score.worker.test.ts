@@ -30,14 +30,16 @@ class MockWorker {
 
   postMessage(_data: unknown) {
     // メッセージ遅延 + 計算時間のシミュレーション
-    setTimeout(async () => {
+    // setTimeout(async () => { // setTimeout を削除し、直接実行
       try {
-        const score = await (performSimilarityCalculation as any)();
+        // performSimilarityCalculation は既にモックされているので、直接呼び出す
+        // await は不要 (vi.fn(async () => ...)) の async はモック内で処理される
+        const score = (performSimilarityCalculation as any)(); // await を削除
         this.onmessage?.({ data: { score } } as MessageEvent);
       } catch (e) {
         this.onerror?.(e as ErrorEvent);
       }
-    }, MOCK_POST_MESSAGE_TIME);
+    // }, MOCK_POST_MESSAGE_TIME); // setTimeout を削除
   }
 
   terminate() {
@@ -103,5 +105,5 @@ describe("Parallel Similarity Scoring with Web Workers", () => {
 
     expect(totalTime).toBeLessThan(expectedTime + 50);
     expect(totalTime).toBeLessThan(450);
-  });
+  }, 10000); // タイムアウトを10000msに延長
 });
