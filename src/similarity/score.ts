@@ -60,6 +60,7 @@ function iou(a: Uint8Array, b: Uint8Array): number {
  * - foregroundMask: ターゲットの前景マスク（RGBA, ただしRGBで判定）
  */
 import { performSimilarityCalculation } from "./scoring-logic";
+import loadOpenCV from "@/lib/opencv-loader";
 
 // WorkerFactory の型定義
 type WorkerFactory = () => Worker;
@@ -82,8 +83,10 @@ export async function calculateSimilarityScore(
   backgroundImage: ImageData,
   foregroundMask: ImageData,
 ): Promise<number> {
+  const cv = await loadOpenCV();
   // performSimilarityCalculation を呼び出す
   return performSimilarityCalculation(
+    cv,
     foregroundImage,
     backgroundImage,
     foregroundMask,
