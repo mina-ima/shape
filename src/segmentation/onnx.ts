@@ -1,28 +1,48 @@
 // src/segmentation/onnx.ts
 import * as ort from "onnxruntime-web";
 
-let session: ort.InferenceSession | null = null;
+// グローバルに 1 回だけ作るセッション（テストからリセット可能）
+let _session: ort.InferenceSession | null = null;
 
+/**
+ * ONNX モデルをロードして InferenceSession を返す。
+ * - 動的 import は使わない（thenable 誤認対策）
+ * - 既にロード済みならキャッシュを返す
+ */
 export async function loadOnnxModel(
   modelPath: string,
 ): Promise<ort.InferenceSession> {
-  if (session) return session;
-  session = await ort.InferenceSession.create(modelPath, {
-    executionProviders: ["wasm"], // テスト安定化
-  });
+  if (_session) return _session;
+
+  _session = await ort.InferenceSession.create(modelPath, {
+    executionProviders: ["wasm"], // 実機/テストの安定化
+  } as any);
+
+  // テストがこのログを検証するため、文言は固定
   console.log("ONNX session loaded successfully.");
-  return session;
+  return _session;
 }
 
-export function getOnnxSession() {
-  return session;
+/** 現在のセッション（未ロードなら null） */
+export function getOnnxSession(): ort.InferenceSession | null {
+  return _session;
 }
 
-export async function ensureSession(modelPath?: string) {
-  if (!session) {
-    if (!modelPath)
-      throw new Error("ONNX session not loaded. Call loadOnnxModel first.");
-    await loadOnnxModel(modelPath);
+/**
+ * セッションが未初期化ならロードして返す。
+ * 明示パスが必要（未指定ならエラーを投げる）。
+ */
+export async function ensureSession(
+  modelPath?: string,
+): Promise<ort.InferenceSession> {
+  if (_session) return _session;
+  if (!modelPath) {
+    throw new Error("ONNX session not loaded. Call loadOnnxModel first.");
   }
-  return session!;
+  return loadOnnxModel(modelPath);
+}
+
+/** テスト用ユーティリティ：セッションを明示的に破棄 */
+export function resetOnnxSession(): void {
+  _session = null;
 }
