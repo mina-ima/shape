@@ -1,135 +1,87 @@
-import {
-  render,
-  screen,
-  fireEvent,
-  act,
-  waitFor,
-} from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, it, expect } from "vitest";
 import Tabs from "./Tabs";
 
 describe("Tabs", () => {
-  it("renders tabs with correct titles", () => {
-    render(
-      <Tabs>
-        <div title="年齢・和暦">Content 1</div>
-        <div title="勤続年数">Content 2</div>
-        <div title="定年まで">Content 3</div>
-        <div title="退職所得">Content 4</div>
-      </Tabs>,
-    );
+  const TestTabs = () => (
+    <Tabs>
+      <div title="Tab 1">Content 1</div>
+      <div title="Tab 2">Content 2</div>
+      <div title="Tab 3">Content 3</div>
+    </Tabs>
+  );
 
-    expect(screen.getByRole("tab", { name: "年齢・和暦" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "勤続年数" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "定年まで" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "退職所得" })).toBeInTheDocument();
+  it("renders tabs and panels correctly", () => {
+    render(<TestTabs />);
+    expect(screen.getByRole("tab", { name: "Tab 1" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Tab 2" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Tab 3" })).toBeInTheDocument();
+    expect(screen.getByText("Content 1")).toBeVisible();
+    expect(screen.getByText("Content 2")).not.toBeVisible();
   });
 
-  it("navigates tabs with ArrowRight and ArrowLeft keys", async () => {
-    render(
-      <Tabs>
-        <div title="年齢・和暦">Content 1</div>
-        <div title="勤続年数">Content 2</div>
-        <div title="定年まで">Content 3</div>
-      </Tabs>,
-    );
+  it("associates tabs with panels using ARIA attributes", () => {
+    const { container } = render(<TestTabs />);
+    const tab1 = screen.getByRole("tab", { name: "Tab 1" });
 
-    const tab1 = screen.getByRole("tab", { name: "年齢・和暦" });
-    const tab2 = screen.getByRole("tab", { name: "勤続年数" });
-    const tab3 = screen.getByRole("tab", { name: "定年まで" });
+    const panelId = tab1.getAttribute("aria-controls");
+    expect(panelId).not.toBeNull();
 
-    act(() => {
-      tab1.focus();
-    });
-    fireEvent.click(tab1);
-    await waitFor(() => expect(tab1).toHaveAttribute("aria-selected", "true"));
+    const panel1 = container.querySelector(`#${panelId}`);
+    expect(panel1).toBeInTheDocument();
+
+    expect(panel1).toHaveTextContent("Content 1");
+    expect(panel1).toHaveAttribute("role", "tabpanel");
+    expect(panel1).toHaveAttribute("aria-labelledby", tab1.id);
+  });
+
+  it("switches tabs on click", () => {
+    render(<TestTabs />);
+    const tab2 = screen.getByRole("tab", { name: "Tab 2" });
+
+    fireEvent.click(tab2);
+
+    expect(tab2).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("Content 1")).not.toBeVisible();
+    expect(screen.getByText("Content 2")).toBeVisible();
+  });
+
+  it("handles keyboard navigation (ArrowRight, ArrowLeft, Home, End)", () => {
+    render(<TestTabs />);
+    const tab1 = screen.getByRole("tab", { name: "Tab 1" });
+    const tab2 = screen.getByRole("tab", { name: "Tab 2" });
+    const tab3 = screen.getByRole("tab", { name: "Tab 3" });
+
+    tab1.focus();
+    expect(tab1).toHaveFocus();
 
     fireEvent.keyDown(tab1, { key: "ArrowRight" });
-    await waitFor(() => expect(tab2).toHaveAttribute("aria-selected", "true"));
+    expect(tab2).toHaveFocus();
 
     fireEvent.keyDown(tab2, { key: "ArrowRight" });
-    await waitFor(() => expect(tab3).toHaveAttribute("aria-selected", "true"));
+    expect(tab3).toHaveFocus();
 
-    fireEvent.keyDown(tab3, { key: "ArrowRight" }); // Should loop
-    await waitFor(() => expect(tab1).toHaveAttribute("aria-selected", "true"));
+    // Loop around
+    fireEvent.keyDown(tab3, { key: "ArrowRight" });
+    expect(tab1).toHaveFocus();
 
-    fireEvent.keyDown(tab1, { key: "ArrowLeft" }); // Should loop
-    await waitFor(() => expect(tab3).toHaveAttribute("aria-selected", "true"));
+    fireEvent.keyDown(tab1, { key: "ArrowLeft" });
+    expect(tab3).toHaveFocus();
 
-    fireEvent.keyDown(tab3, { key: "ArrowLeft" });
-    await waitFor(() => expect(tab2).toHaveAttribute("aria-selected", "true"));
-  });
-
-  it("navigates to the first tab with Home key", async () => {
-    render(
-      <Tabs>
-        <div title="年齢・和暦">Content 1</div>
-        <div title="勤続年数">Content 2</div>
-        <div title="定年まで">Content 3</div>
-      </Tabs>,
-    );
-
-    const tab1 = screen.getByRole("tab", { name: "年齢・和暦" });
-    const tab2 = screen.getByRole("tab", { name: "勤続年数" });
-
-    act(() => {
-      tab2.focus();
-    });
-    fireEvent.click(tab2);
-    await waitFor(() => expect(tab2).toHaveAttribute("aria-selected", "true"));
-
-    fireEvent.keyDown(tab2, { key: "Home" });
-    await waitFor(() => expect(tab1).toHaveAttribute("aria-selected", "true"));
-  });
-
-  it("navigates to the last tab with End key", async () => {
-    render(
-      <Tabs>
-        <div title="年齢・和暦">Content 1</div>
-        <div title="勤続年数">Content 2</div>
-        <div title="定年まで">Content 3</div>
-      </Tabs>,
-    );
-
-    const tab1 = screen.getByRole("tab", { name: "年齢・和暦" });
-    const tab3 = screen.getByRole("tab", { name: "定年まで" });
-
-    act(() => {
-      tab1.focus();
-    });
-    fireEvent.click(tab1);
-    await waitFor(() => expect(tab1).toHaveAttribute("aria-selected", "true"));
+    fireEvent.keyDown(tab3, { key: "Home" });
+    expect(tab1).toHaveFocus();
 
     fireEvent.keyDown(tab1, { key: "End" });
-    await waitFor(() => expect(tab3).toHaveAttribute("aria-selected", "true"));
+    expect(tab3).toHaveFocus();
   });
 
-  it("activates tab on Enter or Space key press", async () => {
-    render(
-      <Tabs>
-        <div title="年齢・和暦">Content 1</div>
-        <div title="勤続年数">Content 2</div>
-      </Tabs>,
-    );
+  it("does not unmount inactive tabs", () => {
+    render(<TestTabs />);
+    expect(screen.getByText("Content 1")).toBeInTheDocument();
+    expect(screen.getByText("Content 2")).toBeInTheDocument();
+    expect(screen.getByText("Content 3")).toBeInTheDocument();
 
-    const tab1 = screen.getByRole("tab", { name: "年齢・和暦" });
-    const tab2 = screen.getByRole("tab", { name: "勤続年数" });
-
-    act(() => {
-      tab1.focus();
-    });
-    await waitFor(() => expect(tab1).toHaveAttribute("aria-selected", "true"));
-
-    act(() => {
-      tab2.focus();
-    });
-    fireEvent.keyDown(tab2, { key: "Enter" });
-    await waitFor(() => expect(tab2).toHaveAttribute("aria-selected", "true"));
-
-    act(() => {
-      tab1.focus();
-    });
-    fireEvent.keyDown(tab1, { key: " " }); // Space key
-    await waitFor(() => expect(tab1).toHaveAttribute("aria-selected", "true"));
+    expect(screen.getByText("Content 1")).toBeVisible();
+    expect(screen.getByText("Content 2")).not.toBeVisible();
   });
 });

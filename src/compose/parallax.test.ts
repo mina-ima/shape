@@ -16,9 +16,9 @@ describe("Layer Generation", () => {
 
     const originalImageData = new Uint8Array(width * height * 4);
     for (let i = 0; i < width * height * 4; i += 4) {
-      originalImageData[i] = 255;     // R
-      originalImageData[i + 1] = 0;   // G
-      originalImageData[i + 2] = 0;   // B
+      originalImageData[i] = 255; // R
+      originalImageData[i + 1] = 0; // G
+      originalImageData[i + 2] = 0; // B
       originalImageData[i + 3] = 255; // A
     }
 

@@ -46,13 +46,18 @@ describe("App", () => {
       unsplashApiKey: "mock-api-key",
     });
 
-    vi.stubGlobal("createImageBitmap", vi.fn(() => Promise.resolve(mockImageBitmap)));
+    vi.stubGlobal(
+      "createImageBitmap",
+      vi.fn(() => Promise.resolve(mockImageBitmap)),
+    );
     vi.stubGlobal("alert", vi.fn());
 
     // Mock location and history
     let currentHash = "";
     const mockLocation = {
-      get hash() { return currentHash; },
+      get hash() {
+        return currentHash;
+      },
       set hash(v: string) {
         currentHash = v;
         window.dispatchEvent(new Event("hashchange"));
@@ -64,7 +69,10 @@ describe("App", () => {
       replace: vi.fn(),
       reload: vi.fn(),
     };
-    Object.defineProperty(window, "location", { configurable: true, value: mockLocation });
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: mockLocation,
+    });
     Object.defineProperty(window, "history", {
       configurable: true,
       value: {
@@ -80,8 +88,14 @@ describe("App", () => {
   });
 
   afterEach(() => {
-    Object.defineProperty(window, "location", { configurable: true, value: originalLocation });
-    Object.defineProperty(window, "history", { configurable: true, value: originalHistory });
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: originalLocation,
+    });
+    Object.defineProperty(window, "history", {
+      configurable: true,
+      value: originalHistory,
+    });
     vi.restoreAllMocks();
   });
 
@@ -93,8 +107,12 @@ describe("App", () => {
   it("should handle image file selection", async () => {
     render(<App />);
     const fileInput = screen.getByLabelText(/ファイルを選択/i);
-    const testFile = new File(["dummy content"], "test.png", { type: "image/png" });
-    await act(async () => { fireEvent.change(fileInput, { target: { files: [testFile] } }); });
+    const testFile = new File(["dummy content"], "test.png", {
+      type: "image/png",
+    });
+    await act(async () => {
+      fireEvent.change(fileInput, { target: { files: [testFile] } });
+    });
     expect(createImageBitmap).toHaveBeenCalledWith(testFile);
     expect(screen.getByText(/選択中の画像: 100x100/i)).toBeInTheDocument();
   });
@@ -102,24 +120,34 @@ describe("App", () => {
   it("should call startProcessFlow with the selected image when '撮影/選択' is clicked", async () => {
     render(<App />);
     const fileInput = screen.getByLabelText(/ファイルを選択/i);
-    const testFile = new File(["dummy content"], "test.png", { type: "image/png" });
-    await act(async () => { fireEvent.change(fileInput, { target: { files: [testFile] } }); });
+    const testFile = new File(["dummy content"], "test.png", {
+      type: "image/png",
+    });
+    await act(async () => {
+      fireEvent.change(fileInput, { target: { files: [testFile] } });
+    });
     const startButton = screen.getByRole("button", { name: "撮影/選択" });
-    await act(async () => { fireEvent.click(startButton); });
+    await act(async () => {
+      fireEvent.click(startButton);
+    });
     expect(mockStartProcessFlow).toHaveBeenCalledWith(mockImageBitmap);
   });
 
   it("handles API key from URL hash", async () => {
     const testApiKey = "test-api-key-123";
     render(<App />);
-    await act(async () => { window.location.hash = `#unsplash_api_key=${testApiKey}`; });
+    await act(async () => {
+      window.location.hash = `#unsplash_api_key=${testApiKey}`;
+    });
     expect(mockSetUnsplashApiKey).toHaveBeenCalledWith(testApiKey);
   });
 
   it("clears API key from URL hash after processing", async () => {
     const testApiKey = "test-api-key-456";
     render(<App />);
-    await act(async () => { window.location.hash = `#unsplash_api_key=${testApiKey}`; });
+    await act(async () => {
+      window.location.hash = `#unsplash_api_key=${testApiKey}`;
+    });
     expect(mockSetUnsplashApiKey).toHaveBeenCalledWith(testApiKey);
     expect(window.history.replaceState).toHaveBeenCalled();
   });

@@ -61,11 +61,16 @@ export function calculateEFD(contour: any, numHarmonics: number): number[] {
   const d: number[] = [];
 
   for (let n = 1; n <= numHarmonics; n++) {
-    let An = 0, Bn = 0, Cn = 0, Dn = 0;
+    let An = 0,
+      Bn = 0,
+      Cn = 0,
+      Dn = 0;
 
     for (let i = 0; i < N; i++) {
-      const x0 = points[i * 2],     y0 = points[i * 2 + 1];
-      const x1 = points[((i + 1) % N) * 2], y1 = points[((i + 1) % N) * 2 + 1];
+      const x0 = points[i * 2],
+        y0 = points[i * 2 + 1];
+      const x1 = points[((i + 1) % N) * 2],
+        y1 = points[((i + 1) % N) * 2 + 1];
 
       const dx = x1 - x0;
       const dy = y1 - y0;
@@ -77,15 +82,21 @@ export function calculateEFD(contour: any, numHarmonics: number): number[] {
       const term1 = (Math.cos(k * t1) - Math.cos(k * t0)) / k;
       const term2 = (Math.sin(k * t1) - Math.sin(k * t0)) / k;
 
-      An += dx * term1;  Bn += dx * term2;
-      Cn += dy * term1;  Dn += dy * term2;
+      An += dx * term1;
+      Bn += dx * term2;
+      Cn += dy * term1;
+      Dn += dy * term2;
     }
 
-    a.push(An); b.push(Bn); c.push(Cn); d.push(Dn);
+    a.push(An);
+    b.push(Bn);
+    c.push(Cn);
+    d.push(Dn);
   }
 
   // 簡易正規化
-  const A1 = a[0], B1 = b[0];
+  const A1 = a[0],
+    B1 = b[0];
   const L0 = Math.hypot(A1, B1) || 1;
   const theta = Math.atan2(A1, B1);
 
@@ -104,6 +115,9 @@ export function calculateEFD(contour: any, numHarmonics: number): number[] {
 }
 
 // 互換名（参照されていてもOK）
-export function calculateEllipticFourierDescriptors(contour: any, harmonics: number = 10): number[] {
+export function calculateEllipticFourierDescriptors(
+  contour: any,
+  harmonics: number = 10,
+): number[] {
   return calculateEFD(contour, harmonics);
 }

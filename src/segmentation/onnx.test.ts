@@ -1,7 +1,15 @@
 /**
  * @vitest-environment happy-dom
  */
-import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
+import { vi, describe, it, expect, beforeEach } from "vitest";
+import getCV from "@/lib/cv"; // 軽量なテスト用モック
+import { postprocess, initialize, runInference } from "./onnx";
+
+// opencv-loader をモックし、テスト用cvを返すようにする
+vi.mock("@/lib/opencv-loader", () => ({
+  default: getCV,
+  loadOpenCV: getCV,
+}));
 import { loadOnnxModel, runOnnxInference } from "./model";
 import { postProcessAlphaMask } from "./postprocess";
 
@@ -56,7 +64,7 @@ vi.mock("./model", async () => {
       return new ort.Tensor(
         "float32",
         new Float32Array(1 * 1 * h * w).fill(1),
-        [1, 1, h, w]
+        [1, 1, h, w],
       );
     }),
   };
@@ -81,12 +89,14 @@ describe("ONNX Runtime Web Integration", () => {
 
   it("should load the U2-Net model and perform inference within performance targets", async () => {
     await loadOnnxModel(modelPath);
-    expect(consoleLogSpy).toHaveBeenCalledWith("ONNX session loaded successfully.");
+    expect(consoleLogSpy).toHaveBeenCalledWith(
+      "ONNX session loaded successfully.",
+    );
 
     const inputTensor = new TensorCtor(
       "float32",
       new Float32Array(512 * 512 * 3),
-      [1, 3, 512, 512]
+      [1, 3, 512, 512],
     );
 
     const t0 = performance.now();
@@ -96,9 +106,12 @@ describe("ONNX Runtime Web Integration", () => {
     expect(outputTensor).toBeInstanceOf(TensorCtor);
     expect(outputTensor.dims).toEqual([1, 1, 512, 512]);
 
-    expect(ort.__mocks.create).toHaveBeenCalledWith(modelPath, expect.any(Object));
+    expect(ort.__mocks.create).toHaveBeenCalledWith(
+      modelPath,
+      expect.any(Object),
+    );
     expect(ort.__mocks.run).toHaveBeenCalledWith(
-      expect.objectContaining({ "input.1": inputTensor })
+      expect.objectContaining({ "input.1": inputTensor }),
     );
 
     const dt = t1 - t0;

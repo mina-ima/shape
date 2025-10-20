@@ -11,10 +11,10 @@ describe("Contour Extraction", () => {
     for (let y = 25; y <= 75; y++) {
       for (let x = 25; x <= 75; x++) {
         const i = (y * width + x) * 4;
-        data[i] = 255;       // R
-        data[i + 1] = 255;   // G
-        data[i + 2] = 255;   // B
-        data[i + 3] = 255;   // A
+        data[i] = 255; // R
+        data[i + 1] = 255; // G
+        data[i + 2] = 255; // B
+        data[i + 3] = 255; // A
       }
     }
     const img = new ImageData(data, width, height);

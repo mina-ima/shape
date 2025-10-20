@@ -1,6 +1,9 @@
 import getCV from "@/lib/cv";
 
-export interface Point { x: number; y: number }
+export interface Point {
+  x: number;
+  y: number;
+}
 
 /**
  * 未定義時のみ、最小の OpenCV 互換 API を注入するポリフィル群。
@@ -25,7 +28,9 @@ function ensureBasics(cv: any) {
         this.type = type;
         this.data = new Uint8Array(rows * cols); // 8UC1 用の単純バッファ
       }
-      delete() {/* noop */}
+      delete() {
+        /* noop */
+      }
     }
     cv.Mat = MockMat;
   }
@@ -34,11 +39,21 @@ function ensureBasics(cv: any) {
   if (cv && typeof cv.MatVector !== "function") {
     class MockMatVector {
       private _arr: any[];
-      constructor() { this._arr = []; }
-      size() { return this._arr.length; }
-      get(i: number) { return this._arr[i]; }
-      push_back(m: any) { this._arr.push(m); }
-      delete() {/* noop */}
+      constructor() {
+        this._arr = [];
+      }
+      size() {
+        return this._arr.length;
+      }
+      get(i: number) {
+        return this._arr[i];
+      }
+      push_back(m: any) {
+        this._arr.push(m);
+      }
+      delete() {
+        /* noop */
+      }
     }
     cv.MatVector = MockMatVector;
   }
@@ -55,7 +70,9 @@ function ensureMatFromImageData(cv: any) {
       rows: img.height,
       cols: img.width,
       data: img.data, // RGBA
-      delete() { /* noop */ }
+      delete() {
+        /* noop */
+      },
     };
   };
 }
@@ -72,14 +89,17 @@ function ensureFindContours(cv: any) {
   cv.RETR_EXTERNAL ??= 0;
   cv.CHAIN_APPROX_SIMPLE ??= 0;
 
-  cv.findContours = (_gray: any, contours: any, _hierarchy: any, _mode: number, _method: number) => {
+  cv.findContours = (
+    _gray: any,
+    contours: any,
+    _hierarchy: any,
+    _mode: number,
+    _method: number,
+  ) => {
     // 適当な 100x100 の矩形（始点 (10,10)）
-    const rect = { data32S: new Int32Array([
-      10, 10,
-      110, 10,
-      110, 110,
-      10, 110
-    ])};
+    const rect = {
+      data32S: new Int32Array([10, 10, 110, 10, 110, 110, 10, 110]),
+    };
     contours.push_back(rect);
   };
 }
@@ -113,13 +133,16 @@ export function extractLargestContour(img: ImageData): Point[] {
     contours,
     hierarchy,
     cv.RETR_EXTERNAL ?? 0,
-    cv.CHAIN_APPROX_SIMPLE ?? 0
+    cv.CHAIN_APPROX_SIMPLE ?? 0,
   );
 
   // 最初の輪郭を採用
   const contour: any = contours.size() > 0 ? contours.get(0) : null;
   if (!contour || !contour.data32S || contour.data32S.length < 4) {
-    contours.delete?.(); hierarchy.delete?.(); src.delete?.(); gray.delete?.();
+    contours.delete?.();
+    hierarchy.delete?.();
+    src.delete?.();
+    gray.delete?.();
     return [];
   }
 
