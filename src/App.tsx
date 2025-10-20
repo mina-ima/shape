@@ -369,18 +369,16 @@ const CameraModal: React.FC<{
     // iOS の一部での鏡像問題はデフォルト非反転（必要なら反転実装を追加）
     ctx.drawImage(v, 0, 0, w, h);
     try {
-      // createImageBitmap が無い古い環境向けフォールバック
       let bmp: ImageBitmap;
       if ("createImageBitmap" in window) {
-        // 直接キャンバスから ImageBitmap 生成
-        // @ts-expect-error Safari でも動作するが型の互換性で警告が出る場合がある
+        // DOM型定義に従い、HTMLCanvasElement は ImageBitmapSource として渡せる
         bmp = await createImageBitmap(canvas);
       } else {
         const blob: Blob | null = await new Promise((res) =>
           canvas.toBlob((b) => res(b), "image/png")
         );
         if (!blob) throw new Error("Blob 生成に失敗しました。");
-        // @ts-ignore
+        // Fallback: Blob から生成
         bmp = await createImageBitmap(blob);
       }
       onCapture(bmp);
