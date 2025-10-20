@@ -14,7 +14,7 @@ export async function loadOnnxModel(
 ): Promise<InferenceSession> {
   if (_session) return _session;
 
-  const url = modelPath ?? "/models/u2netp.onnx";
+  const url = modelPath ?? "/models/u2net.onnx";
 
   // 実環境での安定化用オプション（モック側は無視されてもOK）
   _session = await InferenceSession.create(url, {
