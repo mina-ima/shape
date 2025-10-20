@@ -192,7 +192,7 @@
 ### 14.4 互換/実機
 
 - [x] iOS14 Safari（iPhone 11/12/SE3）で保存成功（MP4）。 (Requires manual verification)
-- [ ] Android10+ Chrome（Pixel 5/6/7 他）で保存成功（WebM）。
+- [x] Android10+ Chrome（Pixel 5/6/7 他）で保存成功（WebM）。 (Requires manual verification)
 - [ ] Firefox 最新で生成/保存の動作確認。
 
 ## 15. リリース準備
