@@ -12,7 +12,9 @@ function rgbBinary(image: ImageData): Uint8Array {
   const bin = new Uint8Array(n / 4);
   let j = 0;
   for (let i = 0; i < n; i += 4) {
-    const r = src[i], g = src[i + 1], b = src[i + 2];
+    const r = src[i],
+      g = src[i + 1],
+      b = src[i + 2];
     bin[j++] = (r | g | b) > 0 ? 1 : 0;
   }
   return bin;
@@ -28,7 +30,8 @@ function equalBinary(a: Uint8Array, b: Uint8Array): boolean {
 /** RGBA配列（生バイト）の完全一致 */
 function equalRGBA(a: ImageData, b: ImageData): boolean {
   if (a.width !== b.width || a.height !== b.height) return false;
-  const ad = a.data, bd = b.data;
+  const ad = a.data,
+    bd = b.data;
   if (ad.length !== bd.length) return false;
   for (let i = 0; i < ad.length; i++) if (ad[i] !== bd[i]) return false;
   return true;
@@ -43,9 +46,11 @@ function hasForeground(a: Uint8Array): boolean {
 /** IoU（0..1）。union=0 の場合は一致なら 1、非一致なら 0。 */
 function iou(a: Uint8Array, b: Uint8Array): number {
   const n = Math.min(a.length, b.length);
-  let inter = 0, union = 0;
+  let inter = 0,
+    union = 0;
   for (let i = 0; i < n; i++) {
-    const av = a[i], bv = b[i];
+    const av = a[i],
+      bv = b[i];
     if (av | bv) union++;
     if (av & bv) inter++;
   }
@@ -66,7 +71,8 @@ import loadOpenCV from "@/lib/opencv-loader";
 type WorkerFactory = () => Worker;
 
 // デフォルトの WorkerFactory (ブラウザの Worker を使用)
-let workerFactory: WorkerFactory = () => new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
+let workerFactory: WorkerFactory = () =>
+  new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
 
 /**
  * Web Worker のファクトリ関数を差し替える (テスト用)
@@ -105,39 +111,49 @@ export async function scoreImagesInParallel(
   backgroundImages: ImageData[],
   foregroundMask: ImageData,
 ): Promise<number[]> {
-  const numWorkers = navigator.hardwareConcurrency || 4; // 利用可能なコア数、またはデフォルト4
-  const workers: Worker[] = [];
-  const results: Promise<number>[] = [];
+  const numWorkers = navigator.hardwareConcurrency || 4;
+  const workers = Array.from({ length: numWorkers }, () => workerFactory());
+  const results = new Array<number>(backgroundImages.length);
+  const taskQueue = backgroundImages.map((_, index) => index);
+  let completedCount = 0;
 
-  for (let i = 0; i < numWorkers; i++) {
-    workers.push(workerFactory());
-  }
+  return new Promise((resolve, reject) => {
+    const processNext = (worker: Worker) => {
+      if (taskQueue.length === 0) {
+        if (completedCount === backgroundImages.length) {
+          workers.forEach((w) => w.terminate());
+          resolve(results);
+        }
+        return;
+      }
 
-  // 各 Worker に画像を分配して処理させる
-  for (let i = 0; i < backgroundImages.length; i++) {
-    const workerIndex = i % numWorkers;
-    const worker = workers[workerIndex];
+      const imageIndex = taskQueue.shift();
+      if (imageIndex === undefined) return;
 
-    results.push(new Promise((resolve, reject) => {
       worker.onmessage = (event) => {
-        resolve(event.data.score);
+        if (event.data.error) {
+          // エラーが発生した場合、Promiseをreject
+          workers.forEach((w) => w.terminate());
+          reject(new Error(event.data.error));
+          return;
+        }
+        results[imageIndex] = event.data.score;
+        completedCount++;
+        processNext(worker);
       };
+
       worker.onerror = (error) => {
+        workers.forEach((w) => w.terminate());
         reject(error);
       };
+
       worker.postMessage({
         foregroundImage,
-        backgroundImage: backgroundImages[i],
+        backgroundImage: backgroundImages[imageIndex],
         foregroundMask,
       });
-    }));
-  }
+    };
 
-  // すべての Worker の処理が完了するのを待つ
-  const scores = await Promise.all(results);
-
-  // Worker を終了
-  workers.forEach(worker => worker.terminate());
-
-  return scores;
+    workers.forEach(processNext);
+  });
 }

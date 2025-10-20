@@ -6,9 +6,9 @@ import { scoreImagesInParallel, setWorkerFactory } from "./score";
 import { performSimilarityCalculation } from "./scoring-logic";
 
 // テスト用の遅延定数
-const MOCK_WORKER_CREATION_TIME = 5;   // ms
-const MOCK_POST_MESSAGE_TIME = 2;      // ms
-const MOCK_CALCULATION_TIME = 50;      // ms
+const MOCK_WORKER_CREATION_TIME = 5; // ms
+const MOCK_POST_MESSAGE_TIME = 2; // ms
+const MOCK_CALCULATION_TIME = 50; // ms
 
 // 類似度計算をモック（実行時間を制御）
 vi.mock("./scoring-logic", () => ({
@@ -28,17 +28,18 @@ class MockWorker {
     setTimeout(() => {}, MOCK_WORKER_CREATION_TIME);
   }
 
-  postMessage(_data: unknown) {
+  postMessage(data: unknown) {
     // メッセージ遅延 + 計算時間のシミュレーション
     // setTimeout(async () => { // setTimeout を削除し、直接実行
+    (async () => {
       try {
         // performSimilarityCalculation は既にモックされているので、直接呼び出す
-        // await は不要 (vi.fn(async () => ...)) の async はモック内で処理される
-        const score = (performSimilarityCalculation as any)(); // await を削除
+        const score = await (performSimilarityCalculation as any)();
         this.onmessage?.({ data: { score } } as MessageEvent);
       } catch (e) {
         this.onerror?.(e as ErrorEvent);
       }
+    })();
     // }, MOCK_POST_MESSAGE_TIME); // setTimeout を削除
   }
 
