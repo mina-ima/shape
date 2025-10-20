@@ -99,4 +99,42 @@ export const processImage = async (
   return createImageBitmap(processedBlob);
 };
 
-export const camera = {};
+export const getCameraInput = async (): Promise<ImageBitmap | undefined> => {
+  let imageBitmap: ImageBitmap | undefined;
+  let stream: MediaStream | undefined;
+
+  try {
+    stream = await getMediaStream();
+    const video = document.createElement("video");
+    video.srcObject = stream;
+    await video.play();
+
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      throw new Error("Failed to get 2D context for camera stream");
+    }
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    imageBitmap = await createImageBitmap(canvas);
+  } catch (error) {
+    if (error instanceof CameraPermissionDeniedError) {
+      console.log("Camera permission denied, falling back to file selection.");
+      imageBitmap = await selectImageFile();
+    } else {
+      console.error("Error with camera stream:", error);
+      // Re-throw if it's not a permission error and not handled by fallback
+      throw error;
+    }
+  } finally {
+    if (stream) {
+      stream.getTracks().forEach((track) => track.stop());
+    }
+  }
+
+  if (imageBitmap) {
+    return processImage(imageBitmap);
+  }
+  return undefined;
+};
