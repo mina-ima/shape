@@ -38,8 +38,9 @@ const App: React.FC = () => {
   // 入力画像（ファイル選択 or カメラ撮影）
   const [inputImage, setInputImage] = useState<ImageBitmap | null>(null);
 
-  // カメラモーダル表示
+  // カメラモーダル表示 & クリック直下で取得したストリーム
   const [showCamera, setShowCamera] = useState(false);
+  const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
 
   // 初回 & ハッシュ変更で unsplash_api_key を取り込む
   const syncKeyFromHash = useCallback(() => {
@@ -67,9 +68,31 @@ const App: React.FC = () => {
     }
   };
 
-  // カメラ起動（モーダルを表示して getUserMedia を開始）
+  // カメラ起動（クリック直下で getUserMedia を開始）
   const handleCameraInput = async () => {
-    setShowCamera(true);
+    try {
+      console.log("[Camera] click: requesting getUserMedia");
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+        },
+        audio: false,
+      });
+      console.log("[Camera] click: gUM success, tracks=", stream.getVideoTracks().length);
+      setCameraStream(stream);
+      setShowCamera(true);
+    } catch (e: any) {
+      console.error("[Camera] click: gUM failed:", e?.name || String(e));
+      alert(
+        e?.name === "NotAllowedError"
+          ? "カメラ権限が拒否されています。ブラウザ/OSのサイト権限でカメラを許可して再試行してください。"
+          : e?.name === "NotFoundError"
+          ? "利用可能なカメラが見つかりません。外付けカメラや他アプリの占有をご確認ください。"
+          : "カメラを初期化できませんでした。別のブラウザ/端末でお試しください。"
+      );
+    }
   };
 
   // 処理開始
@@ -283,10 +306,16 @@ const App: React.FC = () => {
       {/* カメラ撮影モーダル */}
       {showCamera && (
         <CameraModal
-          onClose={() => setShowCamera(false)}
-          onCapture={async (bmp) => {
-            // 撮影した ImageBitmap を inputImage に採用
+          initialStream={cameraStream}
+          onClose={() => {
+            cameraStream?.getTracks().forEach((t) => t.stop());
+            setCameraStream(null);
+            setShowCamera(false);
+          }}
+          onCapture={(bmp) => {
             setInputImage(bmp);
+            cameraStream?.getTracks().forEach((t) => t.stop());
+            setCameraStream(null);
             setShowCamera(false);
           }}
         />
@@ -297,29 +326,45 @@ const App: React.FC = () => {
 
 export default App;
 
-/* --- ここから追加: シンプルなカメラモーダル実装 --- */
+/* --- ここから：カメラモーダル（クリック直下取得ストリーム対応 & 詳細ログ） --- */
 const CameraModal: React.FC<{
   onClose: () => void;
   onCapture: (image: ImageBitmap) => void;
-}> = ({ onClose, onCapture }) => {
+  initialStream?: MediaStream | null;
+}> = ({ onClose, onCapture, initialStream }) => {
   const videoRef = React.useRef<HTMLVideoElement | null>(null);
   const streamRef = React.useRef<MediaStream | null>(null);
   const [errorMsg, setErrorMsg] = React.useState<string | null>(null);
   const [ready, setReady] = React.useState(false);
+  const [logLines, setLogLines] = React.useState<string[]>([]);
+  const log = React.useCallback((...args: any[]) => {
+    const msg = ["[Camera]", ...args].join(" ");
+    console.log(msg);
+    setLogLines((prev) => [...prev, msg].slice(-15));
+  }, []);
 
-  // ストリーム開始
+  // ストリーム設定：initialStream があればそれを使い、なければここで取得
   React.useEffect(() => {
     let stopped = false;
     (async () => {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: { ideal: "environment" }, // 背面カメラ優先（未対応端末は自動フォールバック）
-            width: { ideal: 1920 },
-            height: { ideal: 1080 },
-          },
-          audio: false,
-        });
+        let stream = initialStream || null;
+        if (!stream) {
+          if (typeof navigator === "undefined" || !navigator.mediaDevices) {
+            setErrorMsg("このブラウザはカメラAPIに対応していません。");
+            log("error: mediaDevices not available");
+            return;
+          }
+          log("effect: requesting getUserMedia (fallback)");
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              facingMode: { ideal: "environment" },
+              width: { ideal: 1920 },
+              height: { ideal: 1080 },
+            },
+            audio: false,
+          });
+        }
         if (stopped) {
           stream.getTracks().forEach((t) => t.stop());
           return;
@@ -327,30 +372,54 @@ const CameraModal: React.FC<{
         streamRef.current = stream;
         const v = videoRef.current!;
         v.srcObject = stream;
-        // iOS Safari 対策: playsInline + muted + autoplay
         v.playsInline = true;
         v.muted = true;
-        await v.play();
+
+        await new Promise<void>((resolve) => {
+          if (v.readyState >= 1) resolve();
+          else v.onloadedmetadata = () => resolve();
+        });
+        try {
+          await v.play();
+          log("video.play(): ok", "readyState=", String(v.readyState), "size=", v.videoWidth, "x", v.videoHeight);
+        } catch (pe: any) {
+          log("video.play() failed:", pe?.name || String(pe));
+          setTimeout(async () => {
+            try {
+              await v.play();
+              log("video.play(): retry ok");
+            } catch (pe2) {
+              log("video.play(): retry failed:", String(pe2));
+              setErrorMsg("カメラ映像の再生に失敗しました。別のブラウザ/端末でお試しください。");
+            }
+          }, 0);
+        }
         setReady(true);
+        try {
+          const devs = await navigator.mediaDevices.enumerateDevices();
+          log("devices:", devs.map((d) => `${d.kind}:${d.label || "(no label)"}`).join(", "));
+        } catch {}
       } catch (e: any) {
-        setErrorMsg(
+        log("getUserMedia failed:", e?.name || String(e));
+        const msg =
           e?.name === "NotAllowedError"
             ? "カメラ権限が拒否されました。ブラウザ設定から許可してください。"
             : e?.name === "NotFoundError"
-              ? "利用可能なカメラが見つかりません。"
-              : "カメラを初期化できませんでした。別のブラウザ/端末でお試しください。"
-        );
+            ? "利用可能なカメラが見つかりません。"
+            : e?.name === "NotReadableError"
+            ? "他のアプリがカメラを使用中の可能性があります。アプリを閉じて再試行してください。"
+            : "カメラを初期化できませんでした。別のブラウザ/端末でお試しください。";
+        setErrorMsg(msg);
       }
     })();
     return () => {
       stopped = true;
-      // クリーンアップ
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((t) => t.stop());
         streamRef.current = null;
       }
     };
-  }, []);
+  }, [initialStream, log]);
 
   // 1フレーム撮影して ImageBitmap にする
   const handleSnap = async () => {
@@ -366,23 +435,22 @@ const CameraModal: React.FC<{
       setErrorMsg("Canvas が使用できません。");
       return;
     }
-    // iOS の一部での鏡像問題はデフォルト非反転（必要なら反転実装を追加）
     ctx.drawImage(v, 0, 0, w, h);
     try {
       let bmp: ImageBitmap;
-      if ("createImageBitmap" in window) {
-        // DOM型定義に従い、HTMLCanvasElement は ImageBitmapSource として渡せる
+      if (typeof window !== "undefined" && "createImageBitmap" in window) {
         bmp = await createImageBitmap(canvas);
       } else {
         const blob: Blob | null = await new Promise((res) =>
           canvas.toBlob((b) => res(b), "image/png")
         );
         if (!blob) throw new Error("Blob 生成に失敗しました。");
-        // Fallback: Blob から生成
         bmp = await createImageBitmap(blob);
       }
+      log("snap ok:", String(w), "x", String(h));
       onCapture(bmp);
-    } catch {
+    } catch (e) {
+      log("snap failed:", String(e));
       setErrorMsg("画像の取得に失敗しました。もう一度お試しください。");
     }
   };
@@ -446,6 +514,25 @@ const CameraModal: React.FC<{
           )}
         </div>
         {errorMsg && <p style={{ color: "#ff8080", marginTop: 8 }}>{errorMsg}</p>}
+
+        {/* デバッグログ（直近15行） */}
+        <pre
+          style={{
+            marginTop: 8,
+            fontSize: 12,
+            whiteSpace: "pre-wrap",
+            background: "#000",
+            padding: 8,
+            borderRadius: 8,
+            opacity: 0.8,
+            maxHeight: 160,
+            overflow: "auto",
+            display: logLines.length ? "block" : "none",
+          }}
+        >
+          {logLines.join("\n")}
+        </pre>
+
         <div
           style={{
             display: "flex",
@@ -459,7 +546,7 @@ const CameraModal: React.FC<{
             style={{
               padding: "8px 12px",
               borderRadius: 8,
-              border: "1px solid #555",
+              border: "1px solid "#555",
               background: "#222",
               color: "#ddd",
               cursor: "pointer",
