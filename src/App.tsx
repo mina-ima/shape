@@ -205,7 +205,7 @@ const App: React.FC = () => {
 
       {/* メインの開始ボタン */}
       <button
-        aria-label="撮影/選択"
+        aria-label="選択"
         onClick={handleStart}
         disabled={!unsplashApiKey || isProcessingUI || !inputImage}
         style={{
@@ -217,7 +217,7 @@ const App: React.FC = () => {
           cursor: !unsplashApiKey || !inputImage ? "not-allowed" : "pointer",
         }}
       >
-        {isProcessingUI ? "処理中..." : "撮影/選択"}
+        {isProcessingUI ? "処理中..." : "選択"}
       </button>
 
       {/* processing 中の補助表示（テストで期待） */}

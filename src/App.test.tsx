@@ -126,7 +126,7 @@ describe("App", () => {
     await act(async () => {
       fireEvent.change(fileInput, { target: { files: [testFile] } });
     });
-    const startButton = screen.getByRole("button", { name: "撮影/選択" });
+    const startButton = screen.getByRole("button", { name: "選択" });
     await act(async () => {
       fireEvent.click(startButton);
     });
