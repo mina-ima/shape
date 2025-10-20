@@ -161,6 +161,26 @@ const App: React.FC = () => {
           )}
         </div>
 
+        {/* 選択された画像を表示するUIを追加 */}
+        {inputImage && (
+          <div style={{ marginTop: 16, marginBottom: 16 }}>
+            <h3>選択された画像:</h3>
+            <canvas
+              ref={(canvas) => {
+                if (canvas && inputImage) {
+                  canvas.width = inputImage.width;
+                  canvas.height = inputImage.height;
+                  const ctx = canvas.getContext("2d");
+                  if (ctx) {
+                    ctx.drawImage(inputImage, 0, 0);
+                  }
+                }
+              }}
+              style={{ maxWidth: "100%", height: "auto", border: "1px solid #ccc" }}
+            />
+          </div>
+        )}
+
         <div>
           <strong>Unsplash API Key:</strong>{" "}
           {unsplashApiKey ? (
