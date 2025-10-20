@@ -477,6 +477,8 @@ const CameraModal: React.FC<{
     }
   };
 
+  log("[CameraModal] Rendering. Ready state is:", ready);
+
   return (
     <div
       role="dialog"
@@ -580,11 +582,18 @@ const CameraModal: React.FC<{
             onClick={handleSnap}
             disabled={!ready}
             style={{
-              padding: "8px 12px",
-              borderRadius: 8,
-              border: "1px solid #09f",
-              background: ready ? "#09f" : "#555",
-              color: "#fff",
+              // ★ 強制的に目立たせるスタイル
+              position: "fixed",
+              top: "60%",
+              left: "50%",
+              transform: "translateX(-50%)",
+              zIndex: 9999,
+              padding: "20px 30px",
+              fontSize: "24px",
+              background: ready ? "blue" : "gray", // ready状態もわかるように
+              color: "white",
+              border: "2px solid white",
+              borderRadius: 12,
               cursor: ready ? "pointer" : "not-allowed",
             }}
             aria-label="シャッター"
