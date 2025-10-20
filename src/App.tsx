@@ -1,6 +1,6 @@
-// src/App.tsx
 import React, { useEffect, useCallback, useState } from "react";
 import { useStore, MAX_RETRIES } from "./core/store";
+import { getCameraInput } from "./camera";
 import SegmentationDemo from "./ui/SegmentationDemo";
 import licensesMarkdown from "./docs/licenses.md?raw"; // Import licenses.md as raw string
 import { marked } from "marked"; // Import marked
@@ -70,8 +70,23 @@ const App: React.FC = () => {
   };
 
   const handleCameraInput = async () => {
-    // Placeholder for camera input logic
-    alert("カメラ入力はまだ実装されていません。");
+    try {
+      const imageBitmap = await getCameraInput();
+      if (imageBitmap) {
+        setInputImage(imageBitmap);
+      } else {
+        useStore.setState({
+          status: "error",
+          error: "カメラ入力またはファイル選択に失敗しました。",
+        });
+      }
+    } catch (error) {
+      console.error("Error during camera input:", error);
+      useStore.setState({
+        status: "error",
+        error: `カメラ入力エラー: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
   };
 
   const handleStart = async () => {
