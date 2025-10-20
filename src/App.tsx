@@ -70,6 +70,12 @@ const App: React.FC = () => {
 
   // カメラ起動（クリック直下で getUserMedia を開始）
   const handleCameraInput = async () => {
+    console.log("[Camera] handleCameraInput called.");
+    if (!navigator.mediaDevices) {
+      console.error("[Camera] navigator.mediaDevices is not available.");
+      alert("このブラウザはカメラAPIに対応していません。");
+      return;
+    }
     try {
       console.log("[Camera] click: requesting getUserMedia");
       const stream = await navigator.mediaDevices.getUserMedia({
