@@ -477,8 +477,6 @@ const CameraModal: React.FC<{
     }
   };
 
-  log("[CameraModal] Rendering. Ready state is:", ready);
-
   return (
     <div
       role="dialog"
