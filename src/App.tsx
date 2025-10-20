@@ -381,26 +381,42 @@ const CameraModal: React.FC<{
         v.playsInline = true;
         v.muted = true;
 
+        log("video srcObject set. waiting for metadata...");
+
         await new Promise<void>((resolve) => {
-          if (v.readyState >= 1) resolve();
-          else v.onloadedmetadata = () => resolve();
+          if (v.readyState >= 1) {
+            log("metadata already loaded (readyState=", v.readyState, "). resolving promise.");
+            resolve();
+          }
+          else {
+            v.onloadedmetadata = () => {
+              log("onloadedmetadata event fired. resolving promise.");
+              resolve();
+            };
+          }
         });
+
+        log("metadata loaded. calling video.play()...");
         try {
           await v.play();
-          log("video.play(): ok", "readyState=", String(v.readyState), "size=", v.videoWidth, "x", v.videoHeight);
+          log("video.play() successfully awaited.", "readyState=", String(v.readyState), "size=", v.videoWidth, "x", v.videoHeight);
         } catch (pe: any) {
-          log("video.play() failed:", pe?.name || String(pe));
-          setTimeout(async () => {
-            try {
-              await v.play();
-              log("video.play(): retry ok");
-            } catch (pe2) {
-              log("video.play(): retry failed:", String(pe2));
-              setErrorMsg("カメラ映像の再生に失敗しました。別のブラウザ/端末でお試しください。");
-            }
-          }, 0);
+          log("video.play() failed on first attempt:", pe?.name || String(pe));
+          setErrorMsg("映像の再生開始に失敗。リトライします...");
+          await new Promise(res => setTimeout(res, 100)); // 少し待つ
+          try {
+            await v.play();
+            log("video.play() successfully awaited on retry.");
+            setErrorMsg(null); // 成功したのでエラーメッセージを消す
+          } catch (pe2) {
+            log("video.play() failed on retry:", String(pe2));
+            setErrorMsg("カメラ映像の再生に失敗しました。別のブラウザ/端末でお試しください。");
+            return; // これ以上進めないので抜ける
+          }
         }
+        log("setting ready state to true...");
         setReady(true);
+        log("ready state set to true.");
         try {
           const devs = await navigator.mediaDevices.enumerateDevices();
           log("devices:", devs.map((d) => `${d.kind}:${d.label || "(no label)"}`).join(", "));
