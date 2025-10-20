@@ -546,7 +546,7 @@ const CameraModal: React.FC<{
             style={{
               padding: "8px 12px",
               borderRadius: 8,
-              border: "1px solid "#555",
+              border: "1px solid #555",
               background: "#222",
               color: "#ddd",
               cursor: "pointer",
