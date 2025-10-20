@@ -1,6 +1,13 @@
 // src/similarity/ranking.test.ts
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+import getCV from "@/lib/cv"; // 軽量なテスト用モック
 import { calculateSimilarityScore } from "./score";
+
+// opencv-loader をモックし、テスト用cvを返すようにする
+vi.mock("@/lib/opencv-loader", () => ({
+  default: getCV,
+  loadOpenCV: getCV,
+}));
 
 /**
  * 純JSでRGBA ImageDataを生成して矩形を白塗りする（OpenCV非依存）。
@@ -11,9 +18,9 @@ function createBlankImageData(width: number, height: number): ImageData {
   const data = new Uint8ClampedArray(width * height * 4);
   // 背景は黒・Alpha=255
   for (let i = 0; i < data.length; i += 4) {
-    data[i] = 0;       // R
-    data[i + 1] = 0;   // G
-    data[i + 2] = 0;   // B
+    data[i] = 0; // R
+    data[i + 1] = 0; // G
+    data[i + 2] = 0; // B
     data[i + 3] = 255; // A
   }
   return new ImageData(data, width, height);
@@ -21,9 +28,14 @@ function createBlankImageData(width: number, height: number): ImageData {
 
 function fillRectRGBA(
   img: ImageData,
-  x1: number, y1: number,
-  x2: number, y2: number,
-  r = 255, g = 255, b = 255, a = 255
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  r = 255,
+  g = 255,
+  b = 255,
+  a = 255,
 ) {
   const { width, height, data } = img;
   const minX = Math.max(0, Math.min(x1, x2));
@@ -84,13 +96,13 @@ describe("Similarity Ranking", () => {
     const similar = createShapeImageAndMask("rectangle", width, height);
 
     const perfectScore = await calculateSimilarityScore(
-      target.image,   // foregroundImage（ターゲット）
-      perfect.image,  // backgroundImage（候補：完全一致）
-      target.mask,    // foregroundMask（ターゲットの前景マスク）
+      target.image, // foregroundImage（ターゲット）
+      perfect.image, // backgroundImage（候補：完全一致）
+      target.mask, // foregroundMask（ターゲットの前景マスク）
     );
     const similarScore = await calculateSimilarityScore(
       target.image,
-      similar.image,  // 候補：長方形
+      similar.image, // 候補：長方形
       target.mask,
     );
 

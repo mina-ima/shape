@@ -5,14 +5,23 @@ import * as cameraModule from "../camera";
 
 // Mock the processing module
 vi.mock("../processing", () => ({
-  runSegmentation: vi.fn(() => Promise.resolve({ mask: new ImageData(1, 1), inputSize: { h: 1, w: 1 }, outputName: 'output' })),
+  runSegmentation: vi.fn(() =>
+    Promise.resolve({
+      mask: new ImageData(1, 1),
+      inputSize: { h: 1, w: 1 },
+      outputName: "output",
+    }),
+  ),
 }));
 
 // Mock the camera module
 vi.mock("../camera", async (importOriginal) => {
   const actual = (await importOriginal()) as any;
   const mockMediaStreamTrack = { stop: vi.fn() };
-  const mockMediaStream = { getTracks: () => [mockMediaStreamTrack], getVideoTracks: () => [mockMediaStreamTrack] };
+  const mockMediaStream = {
+    getTracks: () => [mockMediaStreamTrack],
+    getVideoTracks: () => [mockMediaStreamTrack],
+  };
   return {
     ...actual,
     getMediaStream: vi.fn(() => Promise.resolve(mockMediaStream)),
@@ -24,10 +33,16 @@ vi.mock("../camera", async (importOriginal) => {
 const mockedRunSegmentation = runSegmentation as vi.Mock;
 
 describe("useStore", () => {
-  const mockImage = { width: 100, height: 100, close: vi.fn() } as unknown as ImageBitmap;
+  const mockImage = {
+    width: 100,
+    height: 100,
+    close: vi.fn(),
+  } as unknown as ImageBitmap;
 
   beforeEach(() => {
-    act(() => { useStore.getState().reset(); });
+    act(() => {
+      useStore.getState().reset();
+    });
     mockedRunSegmentation.mockClear();
     vi.useFakeTimers();
   });
@@ -50,7 +65,11 @@ describe("useStore", () => {
 
     it("should set success status on the first attempt", async () => {
       const { result } = renderHook(() => useStore());
-      mockedRunSegmentation.mockResolvedValue({ mask: new ImageData(1, 1), inputSize: { h: 1, w: 1 }, outputName: 'output' });
+      mockedRunSegmentation.mockResolvedValue({
+        mask: new ImageData(1, 1),
+        inputSize: { h: 1, w: 1 },
+        outputName: "output",
+      });
 
       await act(async () => {
         result.current.setUnsplashApiKey("test-key");
@@ -73,7 +92,9 @@ describe("useStore", () => {
       });
 
       // Wait for all retries to complete
-      await act(async () => { await vi.runAllTimersAsync(); });
+      await act(async () => {
+        await vi.runAllTimersAsync();
+      });
 
       expect(mockedRunSegmentation).toHaveBeenCalledTimes(3);
       expect(result.current.status).toBe("error");
@@ -84,7 +105,11 @@ describe("useStore", () => {
       const { result } = renderHook(() => useStore());
       mockedRunSegmentation
         .mockRejectedValueOnce(new Error("Failure 1"))
-        .mockResolvedValueOnce({ mask: new ImageData(1, 1), inputSize: { h: 1, w: 1 }, outputName: 'output' });
+        .mockResolvedValueOnce({
+          mask: new ImageData(1, 1),
+          inputSize: { h: 1, w: 1 },
+          outputName: "output",
+        });
 
       await act(async () => {
         result.current.setUnsplashApiKey("test-key");
@@ -92,7 +117,9 @@ describe("useStore", () => {
       });
 
       // Wait for the retry to be scheduled and executed
-      await act(async () => { await vi.runAllTimersAsync(); });
+      await act(async () => {
+        await vi.runAllTimersAsync();
+      });
 
       expect(mockedRunSegmentation).toHaveBeenCalledTimes(2);
       expect(result.current.status).toBe("success");
@@ -103,7 +130,7 @@ describe("useStore", () => {
     it("should reset the state to idle", async () => {
       const { result } = renderHook(() => useStore());
       act(() => {
-        useStore.setState({ status: 'error', error: 'An error' });
+        useStore.setState({ status: "error", error: "An error" });
       });
 
       await act(async () => result.current.reset());

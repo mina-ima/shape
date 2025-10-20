@@ -5,11 +5,7 @@ import type CV from "@techstark/opencv-js";
 const ALPHA_ON = 128;
 
 /** （マスク考慮で）完全一致かどうかを先に判定 */
-function isExactlyEqual(
-  a: ImageData,
-  b: ImageData,
-  mask?: ImageData,
-): boolean {
+function isExactlyEqual(a: ImageData, b: ImageData, mask?: ImageData): boolean {
   if (a.width !== b.width || a.height !== b.height) return false;
 
   const ad = a.data;
@@ -144,11 +140,7 @@ export async function performSimilarityCalculation(
     return 1;
   }
   // 2) コサイン類似度
-  return pixelCosineImageData(
-    foregroundImage,
-    backgroundImage,
-    foregroundMask,
-  );
+  return pixelCosineImageData(foregroundImage, backgroundImage, foregroundMask);
 }
 
 // テストで直接使いたい時用にエクスポート

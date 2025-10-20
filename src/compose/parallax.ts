@@ -1,5 +1,4 @@
 // src/compose/parallax.ts
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import getCV from "@/lib/cv";
 
 /**
@@ -37,7 +36,10 @@ export async function generateLayers(
 
   // original を RGBA に
   const originalImageRGBA = new cv.Mat();
-  if (typeof originalImage.channels === "function" && originalImage.channels() === 3) {
+  if (
+    typeof originalImage.channels === "function" &&
+    originalImage.channels() === 3
+  ) {
     cv.cvtColor(originalImage, originalImageRGBA, cv.COLOR_RGB2RGBA);
   } else {
     originalImage.copyTo(originalImageRGBA);
@@ -70,13 +72,18 @@ export async function generateLayers(
   newRgbaPlanes.push_back(alphaMask8UC1);
   cv.merge(newRgbaPlanes, foreground);
 
-  r.delete(); g.delete(); b.delete();
+  r.delete();
+  g.delete();
+  b.delete();
   newRgbaPlanes.delete();
   rgbaPlanes.delete();
 
   // 背景は RGB 化（モック環境では cvtColor は copy のこともあるがテスト要件は満たす）
   const background = new cv.Mat();
-  if (typeof backgroundImage.channels === "function" && backgroundImage.channels() === 4) {
+  if (
+    typeof backgroundImage.channels === "function" &&
+    backgroundImage.channels() === 4
+  ) {
     cv.cvtColor(backgroundImage, background, cv.COLOR_RGBA2RGB);
   } else if (backgroundImage.channels && backgroundImage.channels() === 1) {
     // 環境により COLOR_GRAY2RGB が無い場合があるため undefined でもOK（モックは copy）
@@ -123,13 +130,17 @@ export async function generateParallaxFrames(
     foregroundLayer,
     fgPadded,
     new cv.Size(Math.round(width * fgScale), Math.round(height * fgScale)),
-    0, 0, cv.INTER_LINEAR,
+    0,
+    0,
+    cv.INTER_LINEAR,
   );
   cv.resize(
     backgroundLayer,
     bgPadded,
     new cv.Size(Math.round(width * bgScale), Math.round(height * bgScale)),
-    0, 0, cv.INTER_LINEAR,
+    0,
+    0,
+    cv.INTER_LINEAR,
   );
 
   const bgPaddedRgba = new cv.Mat();
@@ -139,33 +150,59 @@ export async function generateParallaxFrames(
   const fadeFrames = Math.min(crossfadeFrames, Math.floor(totalFrames / 2));
 
   // CV_64F が無ければ CV_64FC1 を使う（モック互換）
-  const CV_64F = (cv.CV_64F ?? cv.CV_64FC1);
+  const CV_64F = cv.CV_64F ?? cv.CV_64FC1;
 
   for (let i = 0; i < totalFrames; i++) {
     const progress = totalFrames > 1 ? i / (totalFrames - 1) : 0;
     const easedProgress = easeInOutSine(progress);
 
     // 平行移動量
-    const fgTranslateX = panAmount * (1 - easedProgress) - (fgPadded.cols - width) / 2;
+    const fgTranslateX =
+      panAmount * (1 - easedProgress) - (fgPadded.cols - width) / 2;
     const fgTranslateY = -(fgPadded.rows - height) / 2;
-    const bgTranslateX = -panAmount * (1 - easedProgress) - (bgPadded.cols - width) / 2;
+    const bgTranslateX =
+      -panAmount * (1 - easedProgress) - (bgPadded.cols - width) / 2;
     const bgTranslateY = -(bgPadded.rows - height) / 2;
 
     // アフィン行列
-    const fgM = cv.matFromArray(2, 3, CV_64F, [1, 0, fgTranslateX, 0, 1, fgTranslateY]);
-    const bgM = cv.matFromArray(2, 3, CV_64F, [1, 0, bgTranslateX, 0, 1, bgTranslateY]);
+    const fgM = cv.matFromArray(2, 3, CV_64F, [
+      1,
+      0,
+      fgTranslateX,
+      0,
+      1,
+      fgTranslateY,
+    ]);
+    const bgM = cv.matFromArray(2, 3, CV_64F, [
+      1,
+      0,
+      bgTranslateX,
+      0,
+      1,
+      bgTranslateY,
+    ]);
 
     // ワープ
     const warpedFg = new cv.Mat();
     const warpedBgRgba = new cv.Mat();
     const dsize = new cv.Size(width, height);
     cv.warpAffine(
-      fgPadded, warpedFg, fgM, dsize,
-      cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar(),
+      fgPadded,
+      warpedFg,
+      fgM,
+      dsize,
+      cv.INTER_LINEAR,
+      cv.BORDER_CONSTANT,
+      new cv.Scalar(),
     );
     cv.warpAffine(
-      bgPaddedRgba, warpedBgRgba, bgM, dsize,
-      cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar(),
+      bgPaddedRgba,
+      warpedBgRgba,
+      bgM,
+      dsize,
+      cv.INTER_LINEAR,
+      cv.BORDER_CONSTANT,
+      new cv.Scalar(),
     );
 
     // 合成（FG の alpha をマスクにして BG にコピー）
@@ -261,7 +298,8 @@ export function animateParallax(
     // クロスフェード（簡易）
     if (crossfadeDurationSeconds > 0) {
       if (progress > (durationMs - crossfadeDurationMs) / durationMs) {
-        const fadeProgress = (loopTime - (durationMs - crossfadeDurationMs)) / crossfadeDurationMs;
+        const fadeProgress =
+          (loopTime - (durationMs - crossfadeDurationMs)) / crossfadeDurationMs;
         foregroundElement.style.opacity = `${1 - fadeProgress}`;
         backgroundElement.style.opacity = `${1 - fadeProgress}`;
       } else if (progress < crossfadeDurationMs / durationMs) {
