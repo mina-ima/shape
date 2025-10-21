@@ -20,7 +20,7 @@ function parseHashParams(): Record<string, string> {
 }
 
 const App: React.FC = () => {
-  const { status, error, retryCount, processingResolution, unsplashApiKey } =
+  const { status, error, retryCount, processingResolution, unsplashApiKey, generatedVideoBlob } =
     useStore();
   const setUnsplashApiKey = useStore((s) => s.setUnsplashApiKey);
   const startProcessFlow = useStore((s) => s.startProcessFlow);
