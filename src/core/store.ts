@@ -91,7 +91,26 @@ function imageDataToMask1ch(img: ImageData): Uint8Array {
   return out;
 }
 
-/** Canvas/OffscreenCanvas でマスクをターゲット解像度へ拡大 */
+/** 最近傍フォールバック（Canvas が使えない/未実装 API の環境用） */
+function resizeMaskNearestNeighbor(
+  mask: Uint8Array,
+  maskW: number,
+  maskH: number,
+  targetW: number,
+  targetH: number,
+): Uint8Array {
+  const out = new Uint8Array(targetW * targetH);
+  for (let y = 0; y < targetH; y++) {
+    const sy = Math.floor((y * maskH) / targetH);
+    for (let x = 0; x < targetW; x++) {
+      const sx = Math.floor((x * maskW) / targetW);
+      out[y * targetW + x] = mask[sy * maskW + sx];
+    }
+  }
+  return out;
+}
+
+/** Canvas/OffscreenCanvas でマスクをターゲット解像度へ拡大（不可なら NN フォールバック） */
 async function resizeMaskToImage(
   mask: Uint8Array,
   maskW: number,
@@ -105,34 +124,39 @@ async function resizeMaskToImage(
   const canUseDOM = typeof document !== "undefined" && !!document.createElement;
 
   if (hasOffscreen || canUseDOM) {
-    const srcImage = mask1chToImageData(mask, maskW, maskH);
+    try {
+      const srcImage = mask1chToImageData(mask, maskW, maskH);
 
-    const srcCanvas: any = hasOffscreen ? new OffscreenCanvas(maskW, maskH) : document.createElement("canvas");
-    srcCanvas.width = maskW; srcCanvas.height = maskH;
-    const sctx = srcCanvas.getContext("2d")!;
-    sctx.putImageData(srcImage, 0, 0);
+      const srcCanvas: any = hasOffscreen ? new OffscreenCanvas(maskW, maskH) : document.createElement("canvas");
+      srcCanvas.width = maskW; srcCanvas.height = maskH;
+      const sctx = srcCanvas.getContext("2d") as any;
 
-    const dstCanvas: any = hasOffscreen ? new OffscreenCanvas(targetW, targetH) : document.createElement("canvas");
-    dstCanvas.width = targetW; dstCanvas.height = targetH;
-    const dctx = dstCanvas.getContext("2d")!;
-    (dctx as any).imageSmoothingEnabled = true;
-    (dctx as any).imageSmoothingQuality = "high";
-    dctx.drawImage(srcCanvas, 0, 0, targetW, targetH);
+      const dstCanvas: any = hasOffscreen ? new OffscreenCanvas(targetW, targetH) : document.createElement("canvas");
+      dstCanvas.width = targetW; dstCanvas.height = targetH;
+      const dctx = dstCanvas.getContext("2d") as any;
 
-    const dstImage = dctx.getImageData(0, 0, targetW, targetH);
-    return imageDataToMask1ch(dstImage);
+      // jsdom/一部実装では putImageData / drawImage / getImageData が未実装なことがある
+      const hasPut = sctx && typeof sctx.putImageData === "function";
+      const hasDraw = dctx && typeof dctx.drawImage === "function";
+      const hasGet = dctx && typeof dctx.getImageData === "function";
+      if (!hasPut || !hasDraw || !hasGet) {
+        return resizeMaskNearestNeighbor(mask, maskW, maskH, targetW, targetH);
+      }
+
+      sctx.putImageData(srcImage, 0, 0);
+      dctx.imageSmoothingEnabled = true;
+      dctx.imageSmoothingQuality = "high";
+      dctx.drawImage(srcCanvas, 0, 0, targetW, targetH);
+      const dstImage = dctx.getImageData(0, 0, targetW, targetH);
+      return imageDataToMask1ch(dstImage);
+    } catch {
+      // 例外時もフォールバック
+      return resizeMaskNearestNeighbor(mask, maskW, maskH, targetW, targetH);
+    }
   }
 
   // 非ブラウザ環境のフォールバック（最近傍）
-  const out = new Uint8Array(targetW * targetH);
-  for (let y = 0; y < targetH; y++) {
-    const sy = Math.min(maskH - 1, Math.round((y / (targetH - 1)) * (maskH - 1)));
-    for (let x = 0; x < targetW; x++) {
-      const sx = Math.min(maskW - 1, Math.round((x / (targetW - 1)) * (maskW - 1)));
-      out[y * targetW + x] = mask[sy * maskW + sx];
-    }
-  }
-  return out;
+  return resizeMaskNearestNeighbor(mask, maskW, maskH, targetW, targetH);
 }
 
 export const useStore = create<AppState>((set, get) => ({

@@ -18,7 +18,11 @@ import { encodeVideo } from "../encode/encoder";
 vi.mock("../processing", () => ({
   runSegmentation: vi.fn(() =>
     Promise.resolve({
-      mask: new ImageData(1, 1),
+      mask: { // ImageData のモック
+        data: new Uint8Array(new Uint8ClampedArray([0, 0, 0, 255])), // ダミーデータ
+        width: 1,
+        height: 1,
+      } as ImageData,
       inputSize: { h: 1, w: 1 },
       outputName: "output",
     }),
