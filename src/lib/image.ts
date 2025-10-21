@@ -8,7 +8,7 @@ export async function imageBitmapToUint8Array(imageBitmap: ImageBitmap): Promise
   }
   ctx.drawImage(imageBitmap, 0, 0);
   const imageData = ctx.getImageData(0, 0, imageBitmap.width, imageBitmap.height);
-  return imageData.data;
+  return new Uint8Array(imageData.data); // Uint8ClampedArray を Uint8Array に変換
 }
 
 export function createSolidColorImageBitmap(width: number, height: number, color: string = "#000000"): Promise<ImageBitmap> {
