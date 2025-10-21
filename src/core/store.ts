@@ -108,13 +108,13 @@ export const useStore = create<AppState>((set, get) => ({
 
         // 3. Generate layers
         const { foreground, background } = await generateLayers(
-          originalImageUint8,
+          originalImageUint8 as Uint8Array, // 明示的にキャスト
           inputImage.width,
           inputImage.height,
           mask.data,
           mask.width,
           mask.height,
-          backgroundImageUint8,
+          backgroundImageUint8 as Uint8Array, // 明示的にキャスト
           backgroundImageBitmap.width,
           backgroundImageBitmap.height
         );
