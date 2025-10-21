@@ -1,11 +1,9 @@
 import { create } from "zustand";
 import { runSegmentation } from "../processing";
 import { encodeVideo } from "../encode/encoder";
-import { imageBitmapToUint8Array, createSolidColorImageBitmap } from "../lib/image"; // 追加
-import { generateLayers, generateParallaxFrames } from "../compose/parallax"; // 追加
-import cv from "@techstark/opencv-js";
+import { imageBitmapToUint8Array, createSolidColorImageBitmap } from "../lib/image";
+import { generateLayers, generateParallaxFrames } from "../compose/parallax";
 import {
-  getMediaStream,
   processImage,
   CameraPermissionDeniedError,
 } from "../camera";
@@ -17,12 +15,12 @@ type Status = "idle" | "processing" | "success" | "error";
 export type AppState = {
   status: Status;
   error: string | null;
-  /** テストの期待に合わせ「現在の試行番号」を格納（1,2,3 ...）。 */
+  /** 現在の試行番号（1始まり） */
   retryCount: number;
   processingResolution: number;
   unsplashApiKey: string | null;
   generatedVideoBlob: Blob | null;
-  generatedVideoMimeType: string | null; // 追加
+  generatedVideoMimeType: string | null;
 
   setUnsplashApiKey: (key: string | null) => void;
   setProcessingResolution: (res: number) => void;
@@ -32,17 +30,28 @@ export type AppState = {
   _setError: (msg: string) => void;
 };
 
-/** Vercel/TS の差異に強い Uint8 統一ヘルパ：Clamped/ArrayBufferなどを常に Uint8Array に */
-function toUint8ArrayStrict(
+/** TypedArray を Uint8Array に正規化（Clamped/Float32/ArrayBufferに対応） */
+function normalizeToUint8(
   src:
     | Uint8Array
     | Uint8ClampedArray
+    | Float32Array
     | ArrayBuffer
     | { buffer: ArrayBuffer; byteOffset?: number; byteLength?: number },
 ): Uint8Array {
   if (src instanceof Uint8Array) return src;
   if (src instanceof Uint8ClampedArray) {
     return new Uint8Array(src.buffer, src.byteOffset, src.byteLength);
+  }
+  if (src instanceof Float32Array) {
+    // 0..1 or 0..255 を想定。>1 も 0..255 にクリップ
+    const out = new Uint8Array(src.length);
+    for (let i = 0; i < src.length; i++) {
+      const v = src[i];
+      const scaled = v <= 1 ? v * 255 : v;
+      out[i] = Math.max(0, Math.min(255, Math.round(scaled)));
+    }
+    return out;
   }
   if (src instanceof ArrayBuffer) return new Uint8Array(src);
   const buf = (src as any).buffer as ArrayBuffer;
@@ -51,14 +60,89 @@ function toUint8ArrayStrict(
   return new Uint8Array(buf, off, len);
 }
 
+/** RGBA(4ch) → RGB(3ch) 変換 */
+function rgbaToRgb(rgba: Uint8Array, width: number, height: number): Uint8Array {
+  const rgb = new Uint8Array(width * height * 3);
+  for (let i = 0, j = 0; i < rgb.length; i += 3, j += 4) {
+    rgb[i] = rgba[j];       // R
+    rgb[i + 1] = rgba[j+1]; // G
+    rgb[i + 2] = rgba[j+2]; // B
+  }
+  return rgb;
+}
+
+/** 1chマスク(0..255) → ImageData(RGBA) */
+function mask1chToImageData(mask: Uint8Array, width: number, height: number): ImageData {
+  const rgba = new Uint8ClampedArray(width * height * 4);
+  for (let i = 0, j = 0; i < mask.length; i++, j += 4) {
+    const v = mask[i];
+    rgba[j] = v; rgba[j + 1] = v; rgba[j + 2] = v; rgba[j + 3] = 255;
+  }
+  return new ImageData(rgba, width, height);
+}
+
+/** ImageData(RGBA) → 1chマスク(R成分) */
+function imageDataToMask1ch(img: ImageData): Uint8Array {
+  const { data, width, height } = img;
+  const out = new Uint8Array(width * height);
+  for (let i = 0, j = 0; i < out.length; i++, j += 4) {
+    out[i] = data[j];
+  }
+  return out;
+}
+
+/** Canvas/OffscreenCanvas でマスクをターゲット解像度へ拡大 */
+async function resizeMaskToImage(
+  mask: Uint8Array,
+  maskW: number,
+  maskH: number,
+  targetW: number,
+  targetH: number,
+): Promise<Uint8Array> {
+  if (maskW === targetW && maskH === targetH) return mask;
+
+  const hasOffscreen = typeof OffscreenCanvas !== "undefined";
+  const canUseDOM = typeof document !== "undefined" && !!document.createElement;
+
+  if (hasOffscreen || canUseDOM) {
+    const srcImage = mask1chToImageData(mask, maskW, maskH);
+
+    const srcCanvas: any = hasOffscreen ? new OffscreenCanvas(maskW, maskH) : document.createElement("canvas");
+    srcCanvas.width = maskW; srcCanvas.height = maskH;
+    const sctx = srcCanvas.getContext("2d")!;
+    sctx.putImageData(srcImage, 0, 0);
+
+    const dstCanvas: any = hasOffscreen ? new OffscreenCanvas(targetW, targetH) : document.createElement("canvas");
+    dstCanvas.width = targetW; dstCanvas.height = targetH;
+    const dctx = dstCanvas.getContext("2d")!;
+    (dctx as any).imageSmoothingEnabled = true;
+    (dctx as any).imageSmoothingQuality = "high";
+    dctx.drawImage(srcCanvas, 0, 0, targetW, targetH);
+
+    const dstImage = dctx.getImageData(0, 0, targetW, targetH);
+    return imageDataToMask1ch(dstImage);
+  }
+
+  // 非ブラウザ環境のフォールバック（最近傍）
+  const out = new Uint8Array(targetW * targetH);
+  for (let y = 0; y < targetH; y++) {
+    const sy = Math.min(maskH - 1, Math.round((y / (targetH - 1)) * (maskH - 1)));
+    for (let x = 0; x < targetW; x++) {
+      const sx = Math.min(maskW - 1, Math.round((x / (targetW - 1)) * (maskW - 1)));
+      out[y * targetW + x] = mask[sy * maskW + sx];
+    }
+  }
+  return out;
+}
+
 export const useStore = create<AppState>((set, get) => ({
   status: "idle",
   error: null,
-  retryCount: 0, // idle 時は 0
+  retryCount: 0,
   processingResolution: 720,
   unsplashApiKey: null,
   generatedVideoBlob: null,
-  generatedVideoMimeType: null, // 追加
+  generatedVideoMimeType: null,
 
   setUnsplashApiKey: (key) => set({ unsplashApiKey: key }),
 
@@ -75,7 +159,7 @@ export const useStore = create<AppState>((set, get) => ({
       retryCount: 0,
       processingResolution: 720,
       generatedVideoBlob: null,
-      generatedVideoMimeType: null, // 追加
+      generatedVideoMimeType: null,
     }),
 
   _setError: (msg) => set({ status: "error", error: msg }),
@@ -85,10 +169,7 @@ export const useStore = create<AppState>((set, get) => ({
     const { unsplashApiKey } = get();
 
     if (!unsplashApiKey) {
-      set({
-        status: "error",
-        error: "Unsplash API Key is missing",
-      });
+      set({ status: "error", error: "Unsplash API Key is missing" });
       console.log("startProcessFlow: API Key missing.");
       return;
     }
@@ -102,69 +183,82 @@ export const useStore = create<AppState>((set, get) => ({
       return 360;
     };
 
-    const attempt = async (
-      resolution: number,
-      attemptNo: number,
-    ): Promise<void> => {
-      console.log(
-        `Attempt ${attemptNo} started with resolution ${resolution}.`,
-      );
+    const attempt = async (resolution: number, attemptNo: number): Promise<void> => {
+      console.log(`Attempt ${attemptNo} started with resolution ${resolution}.`);
       try {
         set({ retryCount: attemptNo, processingResolution: resolution });
 
-        // 1. Process image (resize, etc.)
+        // 1) 前処理
         const processedImage = await processImage(inputImage);
 
-        // 2. Run segmentation
-        const { mask, inputSize } = await runSegmentation(processedImage);
+        // 2) セグメンテーション
+        const seg = await runSegmentation(processedImage);
 
-        // 3. Convert input images to Uint8Array（型を厳密に統一）
-        const originalImageBytes = await imageBitmapToUint8Array(inputImage);
-        const originalImageUint8 = toUint8ArrayStrict(originalImageBytes);
+        // 出力から data/width/height を頑健に解決
+        const rawMaskData =
+          (seg as any)?.mask?.data ??
+          (seg as any)?.mask ??
+          (seg as any);
+        const maskW =
+          (seg as any)?.mask?.width ??
+          (seg as any)?.inputSize?.w ??
+          320;
+        const maskH =
+          (seg as any)?.mask?.height ??
+          (seg as any)?.inputSize?.h ??
+          320;
 
-        const backgroundImageBitmap = await createSolidColorImageBitmap(
+        // 3) マスクを Uint8 に正規化 → 元画像サイズへ拡大
+        const maskUint8 = normalizeToUint8(rawMaskData);
+        const resizedMask = await resizeMaskToImage(
+          maskUint8,
+          maskW,
+          maskH,
+          inputImage.width,
+          inputImage.height,
+        );
+
+        // 4) 元画像/背景のバイト列を取得し、RGB(3ch)へ
+        const origBytesRGBA = normalizeToUint8(await imageBitmapToUint8Array(inputImage));
+        const originalRGB = rgbaToRgb(origBytesRGBA, inputImage.width, inputImage.height);
+
+        const bgBitmap = await createSolidColorImageBitmap(
           inputImage.width,
           inputImage.height,
           "#000000",
         );
-        const backgroundImageBytes = await imageBitmapToUint8Array(backgroundImageBitmap);
-        const backgroundImageUint8 = toUint8ArrayStrict(backgroundImageBytes);
+        const bgBytesRGBA = normalizeToUint8(await imageBitmapToUint8Array(bgBitmap));
+        const backgroundRGB = rgbaToRgb(bgBytesRGBA, bgBitmap.width, bgBitmap.height);
 
-        // 4. Generate layers（mask.data は Uint8ClampedArray のことがあるため明示変換）
-        const maskDataUint8 = toUint8ArrayStrict((mask as any).data ?? (mask as any));
+        // 5) レイヤ生成（元画像サイズの1chマスク＋RGB3ch画像を渡す）
         const { foreground, background } = await generateLayers(
-          originalImageUint8,
+          originalRGB,
           inputImage.width,
           inputImage.height,
-          maskDataUint8,
-          (mask as any).width ?? inputImage.width,
-          (mask as any).height ?? inputImage.height,
-          backgroundImageUint8,
-          backgroundImageBitmap.width,
-          backgroundImageBitmap.height
+          resizedMask,
+          inputImage.width,
+          inputImage.height,
+          backgroundRGB,
+          bgBitmap.width,
+          bgBitmap.height,
         );
 
-        // 5. Generate parallax frames
+        // 6) パララックス → 動画エンコード
         const fps = 30;
-        const duration = 5; // seconds
+        const duration = 5;
         const frames = await generateParallaxFrames(
           foreground,
           background,
           inputImage.width,
           inputImage.height,
           duration,
-          fps
+          fps,
         );
 
-        // 6. Encode video（既存APIシグネチャに合わせる）
         const videoBlob = await encodeVideo(frames, fps);
         set({ generatedVideoBlob: videoBlob, generatedVideoMimeType: videoBlob.type });
 
-        set({
-          status: "success",
-          error: null,
-          retryCount: attemptNo,
-        });
+        set({ status: "success", error: null, retryCount: attemptNo });
         console.log("Attempt successful.");
         return;
       } catch (err) {
@@ -178,37 +272,17 @@ export const useStore = create<AppState>((set, get) => ({
                 : "Unknown error";
         console.log("Error caught in attempt:", message);
 
-        // カメラ権限エラーの場合はリトライせず、即座にエラー状態にする
         if (err instanceof CameraPermissionDeniedError) {
-          set({
-            status: "error",
-            error: message,
-            retryCount: attemptNo, // 試行回数を維持
-          });
-          console.log(
-            "Store: CameraPermissionDeniedError caught. Status:",
-            get().status,
-            "Error:",
-            get().error,
-          );
+          set({ status: "error", error: message, retryCount: attemptNo });
           return;
         }
 
         if (attemptNo >= MAX_RETRIES) {
-          // すべて失敗
-          set({
-            status: "error",
-            error: message,
-            retryCount: MAX_RETRIES,
-          });
-          console.log(
-            "Attempt failed (max retries reached). Status:",
-            get().status,
-          );
+          set({ status: "error", error: message, retryCount: MAX_RETRIES });
+          console.log("Attempt failed (max retries reached). Status:", get().status);
           return;
         }
 
-        // 次回のために即時に状態を更新（tests はここで retryCount=2, 解像度=540 などを期待）
         const nextRes = nextResolution(resolution);
         set({
           retryCount: attemptNo + 1,
@@ -227,7 +301,6 @@ export const useStore = create<AppState>((set, get) => ({
     };
 
     const { processingResolution } = get();
-    // 試行番号は 1 始まり
     await attempt(processingResolution, 1);
   },
 }));
