@@ -2,6 +2,7 @@ import { act, renderHook } from "@testing-library/react";
 import { useStore } from "./store";
 import { runSegmentation } from "../processing";
 import * as cameraModule from "../camera";
+import { encodeVideo } from "../encode/encoder"; // encodeVideo をインポート
 
 // Mock the processing module
 vi.mock("../processing", () => ({
@@ -30,7 +31,13 @@ vi.mock("../camera", async (importOriginal) => {
   };
 });
 
+// Mock the encoder module
+vi.mock("../encode/encoder", () => ({
+  encodeVideo: vi.fn(() => Promise.resolve(new Blob(["mock video"], { type: "video/webm" }))),
+}));
+
 const mockedRunSegmentation = runSegmentation as vi.Mock;
+const mockedEncodeVideo = encodeVideo as vi.Mock; // encodeVideo のモックを取得
 
 describe("useStore", () => {
   const mockImage = {
@@ -42,8 +49,11 @@ describe("useStore", () => {
   beforeEach(() => {
     act(() => {
       useStore.getState().reset();
+      // generatedVideoBlob もリセット
+      useStore.setState({ generatedVideoBlob: null });
     });
     mockedRunSegmentation.mockClear();
+    mockedEncodeVideo.mockClear(); // encodeVideo のモックをクリア
     vi.useFakeTimers();
   });
 
@@ -61,6 +71,7 @@ describe("useStore", () => {
       });
       expect(result.current.status).toBe("error");
       expect(result.current.error).toContain("Unsplash API Key is missing");
+      expect(mockedEncodeVideo).not.toHaveBeenCalled(); // encodeVideo が呼ばれないことを確認
     });
 
     it("should set success status on the first attempt", async () => {
@@ -79,6 +90,8 @@ describe("useStore", () => {
       expect(result.current.status).toBe("success");
       expect(mockedRunSegmentation).toHaveBeenCalledTimes(1);
       expect(result.current.retryCount).toBe(1);
+      expect(mockedEncodeVideo).toHaveBeenCalledTimes(1); // encodeVideo が呼ばれたことを確認
+      expect(result.current.generatedVideoBlob).toBeInstanceOf(Blob); // generatedVideoBlob が設定されたことを確認
     });
 
     it("should handle the full retry cycle and finally fail", async () => {
@@ -87,11 +100,9 @@ describe("useStore", () => {
 
       await act(async () => {
         result.current.setUnsplashApiKey("test-key");
-        // No await here, as the process is expected to run in the background with timers
         result.current.startProcessFlow(mockImage);
       });
 
-      // Wait for all retries to complete
       await act(async () => {
         await vi.runAllTimersAsync();
       });
@@ -99,6 +110,7 @@ describe("useStore", () => {
       expect(mockedRunSegmentation).toHaveBeenCalledTimes(3);
       expect(result.current.status).toBe("error");
       expect(result.current.error).toContain("Simulated failure");
+      expect(mockedEncodeVideo).not.toHaveBeenCalled(); // 失敗時は呼ばれないことを確認
     });
 
     it("should succeed on the second attempt", async () => {
@@ -116,13 +128,14 @@ describe("useStore", () => {
         result.current.startProcessFlow(mockImage);
       });
 
-      // Wait for the retry to be scheduled and executed
       await act(async () => {
         await vi.runAllTimersAsync();
       });
 
       expect(mockedRunSegmentation).toHaveBeenCalledTimes(2);
       expect(result.current.status).toBe("success");
+      expect(mockedEncodeVideo).toHaveBeenCalledTimes(1); // 成功時は呼ばれることを確認
+      expect(result.current.generatedVideoBlob).toBeInstanceOf(Blob); // generatedVideoBlob が設定されたことを確認
     });
   });
 
@@ -130,7 +143,11 @@ describe("useStore", () => {
     it("should reset the state to idle", async () => {
       const { result } = renderHook(() => useStore());
       act(() => {
-        useStore.setState({ status: "error", error: "An error" });
+        useStore.setState({
+          status: "error",
+          error: "An error",
+          generatedVideoBlob: new Blob(), // ダミーのBlobを設定
+        });
       });
 
       await act(async () => result.current.reset());
@@ -138,6 +155,7 @@ describe("useStore", () => {
       expect(result.current.status).toBe("idle");
       expect(result.current.error).toBeNull();
       expect(result.current.retryCount).toBe(0);
+      expect(result.current.generatedVideoBlob).toBeNull(); // generatedVideoBlob が null にリセットされたことを確認
     });
   });
 });

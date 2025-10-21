@@ -248,7 +248,32 @@ const App: React.FC = () => {
       {!isProcessingUI && status === "success" && (
         <div style={{ marginTop: 16 }}>
           <h3>成功!</h3>
-          <button onClick={reset}>もう一度</button>
+          {generatedVideoBlob && (
+            <button
+              onClick={() => {
+                const url = URL.createObjectURL(generatedVideoBlob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = "parallax_video.webm"; // または適切なファイル名
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+              }}
+              style={{
+                padding: "10px 16px",
+                borderRadius: 8,
+                border: "1px solid #ccc",
+                background: "#007bff",
+                color: "#fff",
+                cursor: "pointer",
+                marginTop: 8,
+              }}
+            >
+              動画をダウンロード
+            </button>
+          )}
+          <button onClick={reset} style={{ marginLeft: 8 }}>もう一度</button>
         </div>
       )}
 

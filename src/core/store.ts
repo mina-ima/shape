@@ -1,6 +1,8 @@
 // src/core/store.ts
 import { create } from "zustand";
 import { runSegmentation } from "../processing";
+import { encodeVideo } from "../encode/encoder"; // 追加
+import cv from "@techstark/opencv-js"; // 追加
 import {
   getMediaStream,
   processImage,
@@ -18,6 +20,7 @@ type AppState = {
   retryCount: number;
   processingResolution: number;
   unsplashApiKey: string | null;
+  generatedVideoBlob: Blob | null; // 追加
 
   setUnsplashApiKey: (key: string | null) => void;
   setProcessingResolution: (res: number) => void;
@@ -33,6 +36,7 @@ export const useStore = create<AppState>((set, get) => ({
   retryCount: 0, // idle 時は 0
   processingResolution: 720,
   unsplashApiKey: null,
+  generatedVideoBlob: null, // 追加
 
   setUnsplashApiKey: (key) => set({ unsplashApiKey: key }),
 
@@ -48,6 +52,7 @@ export const useStore = create<AppState>((set, get) => ({
       error: null,
       retryCount: 0,
       processingResolution: 720,
+      generatedVideoBlob: null, // 追加
     }),
 
   _setError: (msg) => set({ status: "error", error: msg }),
@@ -89,6 +94,14 @@ export const useStore = create<AppState>((set, get) => ({
 
         // 2. Run segmentation
         await runSegmentation(processedImage);
+
+        // 3. Generate video frames (placeholder for now)
+        const dummyFrames: cv.Mat[] = []; // Replace with actual frame generation
+        const fps = 30; // Example FPS
+
+        // 4. Encode video
+        const videoBlob = await encodeVideo(dummyFrames, fps);
+        set({ generatedVideoBlob: videoBlob });
 
         set({
           status: "success",
