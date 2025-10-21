@@ -119,31 +119,34 @@ export const useStore = create<AppState>((set, get) => ({
         // 2. セグメンテーション
         const { mask, inputSize } = await runSegmentation(processedImage);
 
-        // 3. 入力画像 -> Uint8Array
-        const originalImageBytesMaybe = await imageBitmapToUint8Array(inputImage);
-        const originalImageUint8 = toUint8ArrayStrict(originalImageBytesMaybe);
+        // Convert inputImage to Uint8Array
+        const originalImageUint8 = await imageBitmapToUint8Array(inputImage);
 
-        // 3'. 背景（いまは単色）を生成し Uint8Array 化
-        const backgroundImageBitmap = await createSolidColorImageBitmap(
-          inputImage.width,
-          inputImage.height,
-          "#000000",
-        );
-        const backgroundImageBytesMaybe = await imageBitmapToUint8Array(backgroundImageBitmap);
-        const backgroundImageUint8 = toUint8ArrayStrict(backgroundImageBytesMaybe);
+        // Create a dummy background image (solid black for now)
+        const backgroundImageBitmap = await createSolidColorImageBitmap(inputImage.width, inputImage.height, "#000000");
+        const backgroundImageUint8 = await imageBitmapToUint8Array(backgroundImageBitmap);
 
-        // 4. レイヤ生成（mask.data が Clamped の可能性に対応して明示変換）
-        const maskDataUint8 = toUint8ArrayStrict((mask as any).data ?? (mask as any));
+        console.log("Debug: originalImageUint8.length", originalImageUint8.length);
+        console.log("Debug: inputImage.width", inputImage.width);
+        console.log("Debug: inputImage.height", inputImage.height);
+        console.log("Debug: mask.data.length", mask.data.length);
+        console.log("Debug: mask.width", mask.width);
+        console.log("Debug: mask.height", mask.height);
+        console.log("Debug: backgroundImageUint8.length", backgroundImageUint8.length);
+        console.log("Debug: backgroundImageBitmap.width", backgroundImageBitmap.width);
+        console.log("Debug: backgroundImageBitmap.height", backgroundImageBitmap.height);
+
+        // 3. Generate layers
         const { foreground, background } = await generateLayers(
-          originalImageUint8,
+          originalImageUint8 as Uint8Array, // 明示的にキャスト
           inputImage.width,
           inputImage.height,
-          maskDataUint8,
-          (mask as any).width ?? inputImage.width,
-          (mask as any).height ?? inputImage.height,
-          backgroundImageUint8,
+          mask.data,
+          mask.width,
+          mask.height,
+          backgroundImageUint8 as Uint8Array, // 明示的にキャスト
           backgroundImageBitmap.width,
-          backgroundImageBitmap.height,
+          backgroundImageBitmap.height
         );
 
         // 5. パララックスフレーム生成
