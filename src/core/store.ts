@@ -1,8 +1,8 @@
 import { create } from "zustand";
 import { runSegmentation } from "../processing";
 import { encodeVideo } from "../encode/encoder";
-import { imageBitmapToUint8Array, createSolidColorImageBitmap } from "../lib/image"; // 追加
-import { generateLayers, generateParallaxFrames } from "../compose/parallax"; // 追加
+import { imageBitmapToUint8Array, createSolidColorImageBitmap } from "../lib/image";
+import { generateLayers, generateParallaxFrames } from "../compose/parallax";
 import cv from "@techstark/opencv-js";
 import {
   getMediaStream,
@@ -22,7 +22,7 @@ export type AppState = {
   processingResolution: number;
   unsplashApiKey: string | null;
   generatedVideoBlob: Blob | null;
-  generatedVideoMimeType: string | null; // 追加
+  generatedVideoMimeType: string | null;
 
   setUnsplashApiKey: (key: string | null) => void;
   setProcessingResolution: (res: number) => void;
@@ -32,6 +32,26 @@ export type AppState = {
   _setError: (msg: string) => void;
 };
 
+/** Vercel/TSの型差異に強い Uint8 変換（Clamped を含め全て Uint8Array に統一） */
+function toUint8ArrayStrict(
+  src:
+    | Uint8Array
+    | Uint8ClampedArray
+    | ArrayBuffer
+    | { buffer: ArrayBuffer; byteOffset?: number; byteLength?: number },
+): Uint8Array {
+  if (src instanceof Uint8Array) return src;
+  if (src instanceof Uint8ClampedArray) {
+    return new Uint8Array(src.buffer, src.byteOffset, src.byteLength);
+  }
+  if (src instanceof ArrayBuffer) return new Uint8Array(src);
+  // ImageData.data など {buffer, byteOffset, byteLength} を持つケースに対応
+  const buf = (src as any).buffer as ArrayBuffer;
+  const off = (src as any).byteOffset ?? 0;
+  const len = (src as any).byteLength ?? (buf ? buf.byteLength - off : 0);
+  return new Uint8Array(buf, off, len);
+}
+
 export const useStore = create<AppState>((set, get) => ({
   status: "idle",
   error: null,
@@ -39,7 +59,7 @@ export const useStore = create<AppState>((set, get) => ({
   processingResolution: 720,
   unsplashApiKey: null,
   generatedVideoBlob: null,
-  generatedVideoMimeType: null, // 追加
+  generatedVideoMimeType: null,
 
   setUnsplashApiKey: (key) => set({ unsplashApiKey: key }),
 
@@ -56,7 +76,7 @@ export const useStore = create<AppState>((set, get) => ({
       retryCount: 0,
       processingResolution: 720,
       generatedVideoBlob: null,
-      generatedVideoMimeType: null, // 追加
+      generatedVideoMimeType: null,
     }),
 
   _setError: (msg) => set({ status: "error", error: msg }),
@@ -93,33 +113,40 @@ export const useStore = create<AppState>((set, get) => ({
       try {
         set({ retryCount: attemptNo, processingResolution: resolution });
 
-        // 1. Process image (resize, etc.)
+        // 1. 入力画像の前処理（リサイズ等）
         const processedImage = await processImage(inputImage);
 
-        // 2. Run segmentation
+        // 2. セグメンテーション
         const { mask, inputSize } = await runSegmentation(processedImage);
 
-        // Convert inputImage to Uint8Array
-        const originalImageUint8 = await imageBitmapToUint8Array(inputImage);
+        // 3. 入力画像 -> Uint8Array
+        const originalImageBytesMaybe = await imageBitmapToUint8Array(inputImage);
+        const originalImageUint8 = toUint8ArrayStrict(originalImageBytesMaybe);
 
-        // Create a dummy background image (solid black for now)
-        const backgroundImageBitmap = await createSolidColorImageBitmap(inputImage.width, inputImage.height, "#000000");
-        const backgroundImageUint8 = await imageBitmapToUint8Array(backgroundImageBitmap);
-
-        // 3. Generate layers
-        const { foreground, background } = await generateLayers(
-          originalImageUint8 as Uint8Array, // 明示的にキャスト
+        // 3'. 背景（いまは単色）を生成し Uint8Array 化
+        const backgroundImageBitmap = await createSolidColorImageBitmap(
           inputImage.width,
           inputImage.height,
-          mask.data,
-          mask.width,
-          mask.height,
-          backgroundImageUint8 as Uint8Array, // 明示的にキャスト
+          "#000000",
+        );
+        const backgroundImageBytesMaybe = await imageBitmapToUint8Array(backgroundImageBitmap);
+        const backgroundImageUint8 = toUint8ArrayStrict(backgroundImageBytesMaybe);
+
+        // 4. レイヤ生成（mask.data が Clamped の可能性に対応して明示変換）
+        const maskDataUint8 = toUint8ArrayStrict((mask as any).data ?? (mask as any));
+        const { foreground, background } = await generateLayers(
+          originalImageUint8,
+          inputImage.width,
+          inputImage.height,
+          maskDataUint8,
+          (mask as any).width ?? inputImage.width,
+          (mask as any).height ?? inputImage.height,
+          backgroundImageUint8,
           backgroundImageBitmap.width,
-          backgroundImageBitmap.height
+          backgroundImageBitmap.height,
         );
 
-        // 4. Generate parallax frames
+        // 5. パララックスフレーム生成
         const fps = 30;
         const duration = 5; // seconds
         const frames = await generateParallaxFrames(
@@ -128,10 +155,10 @@ export const useStore = create<AppState>((set, get) => ({
           inputImage.width,
           inputImage.height,
           duration,
-          fps
+          fps,
         );
 
-        // 5. Encode video
+        // 6. エンコード（プロジェクトの既存APIに合わせて frames と fps を渡す）
         const videoBlob = await encodeVideo(frames, fps);
         set({ generatedVideoBlob: videoBlob, generatedVideoMimeType: videoBlob.type });
 
@@ -183,7 +210,7 @@ export const useStore = create<AppState>((set, get) => ({
           return;
         }
 
-        // 次回のために即時に状態を更新（tests はここで retryCount=2, 解像度=540 などを期待）
+        // 次回リトライ準備
         const nextRes = nextResolution(resolution);
         set({
           retryCount: attemptNo + 1,
