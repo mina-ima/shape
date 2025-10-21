@@ -174,3 +174,4 @@ export async function runOnnxInference(input: Tensor): Promise<Tensor> {
   for (let i = 0; i < data.length; i++) data[i] = (i % w) / Math.max(1, w - 1);
   return new Tensor("float32", data, [1, 1, h, w]);
 }
+
