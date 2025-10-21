@@ -1,23 +1,71 @@
 // src/segmentation/model.ts
+// 目的：ONNXモデルの事前検証＋フォールバックで、本番のLFSポインタ/404でも落ちないようにする。
 import { InferenceSession, Tensor } from "onnxruntime-web";
 
 // 単純キャッシュ付きのセッション。テスト/実機で共有。
 let _session: InferenceSession | null = null;
 
 /**
- * モデルをロードして InferenceSession を返す。
- * - 動的 import は使わない（thenable 誤認対策）
- * - 既にロード済みならキャッシュを返す
+ * モデルURLが有効かを判定する軽量チェック
+ * - HTTP 200 か
+ * - サイズが十分か（1KB未満はポインタ/エラーページ疑い）
+ * - 先頭テキストが HTML/LFSポインタでないか
  */
-export async function loadOnnxModel(
-  modelPath?: string,
-): Promise<InferenceSession> {
+async function isValidOnnx(url: string): Promise<boolean> {
+  try {
+    const res = await fetch(url, { method: "GET" });
+    if (!res.ok) return false;
+
+    const buf = await res.arrayBuffer();
+
+    // 小さすぎる場合はポインタ/エラーページの可能性が高い
+    if (buf.byteLength < 1024) return false;
+
+    // 先頭だけ読んでLFSポインタやHTMLを検出
+    const head = new TextDecoder().decode(new Uint8Array(buf.slice(0, 120)));
+    const maybeHtml =
+      head.toLowerCase().includes("<!doctype html") ||
+      head.toLowerCase().includes("<html");
+    const maybeLfs = head.includes("git-lfs.github.com/spec/v1");
+
+    return !(maybeHtml || maybeLfs);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * モデルをロードして InferenceSession を返す。
+ * - まず primary(/models/u2net.onnx) を検証、NGなら fallback(/models/u2netp.onnx)
+ * - modelPath が明示されたらそれを最優先で検証
+ * - どれもダメな場合は primary でエラーを出して原因が見えるようにする
+ */
+export async function loadOnnxModel(modelPath?: string): Promise<InferenceSession> {
   if (_session) return _session;
 
-  const url = modelPath ?? "/models/u2net.onnx";
+  const primary = modelPath ?? "/models/u2net.onnx";
+  const fallback = "/models/u2netp.onnx";
+
+  const candidates = modelPath ? [modelPath, primary, fallback] : [primary, fallback];
+
+  let selected: string | null = null;
+  for (const u of candidates) {
+    if (await isValidOnnx(u)) {
+      selected = u;
+      break;
+    }
+  }
+
+  if (!selected) {
+    // すべてNG → あえて primary で失敗して意味のあるエラーを出す
+    selected = primary;
+    console.error("[Model] No valid ONNX found. Tried:", candidates);
+  } else {
+    console.log("[Model] Using ONNX:", selected);
+  }
 
   // 実環境での安定化用オプション（モック側は無視されてもOK）
-  _session = await InferenceSession.create(url, {
+  _session = await InferenceSession.create(selected, {
     executionProviders: ["wasm"],
   } as any);
 
