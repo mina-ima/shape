@@ -1,8 +1,9 @@
-// src/core/store.ts
 import { create } from "zustand";
 import { runSegmentation } from "../processing";
-import { encodeVideo } from "../encode/encoder"; // 追加
-import cv from "@techstark/opencv-js"; // 追加
+import { encodeVideo } from "../encode/encoder";
+import { imageBitmapToUint8Array, createSolidColorImageBitmap } from "../lib/image"; // 追加
+import { generateLayers, generateParallaxFrames } from "../compose/parallax"; // 追加
+import cv from "@techstark/opencv-js";
 import {
   getMediaStream,
   processImage,
@@ -13,14 +14,15 @@ export const MAX_RETRIES = 3;
 
 type Status = "idle" | "processing" | "success" | "error";
 
-type AppState = {
+export type AppState = {
   status: Status;
   error: string | null;
   /** テストの期待に合わせ「現在の試行番号」を格納（1,2,3 ...）。 */
   retryCount: number;
   processingResolution: number;
   unsplashApiKey: string | null;
-  generatedVideoBlob: Blob | null; // 追加
+  generatedVideoBlob: Blob | null;
+  generatedVideoMimeType: string | null; // 追加
 
   setUnsplashApiKey: (key: string | null) => void;
   setProcessingResolution: (res: number) => void;
@@ -36,7 +38,8 @@ export const useStore = create<AppState>((set, get) => ({
   retryCount: 0, // idle 時は 0
   processingResolution: 720,
   unsplashApiKey: null,
-  generatedVideoBlob: null, // 追加
+  generatedVideoBlob: null,
+  generatedVideoMimeType: null, // 追加
 
   setUnsplashApiKey: (key) => set({ unsplashApiKey: key }),
 
@@ -52,7 +55,8 @@ export const useStore = create<AppState>((set, get) => ({
       error: null,
       retryCount: 0,
       processingResolution: 720,
-      generatedVideoBlob: null, // 追加
+      generatedVideoBlob: null,
+      generatedVideoMimeType: null, // 追加
     }),
 
   _setError: (msg) => set({ status: "error", error: msg }),
@@ -93,15 +97,43 @@ export const useStore = create<AppState>((set, get) => ({
         const processedImage = await processImage(inputImage);
 
         // 2. Run segmentation
-        await runSegmentation(processedImage);
+        const { mask, inputSize } = await runSegmentation(processedImage);
 
-        // 3. Generate video frames (placeholder for now)
-        const dummyFrames: cv.Mat[] = []; // Replace with actual frame generation
-        const fps = 30; // Example FPS
+        // Convert inputImage to Uint8Array
+        const originalImageUint8 = await imageBitmapToUint8Array(inputImage);
 
-        // 4. Encode video
-        const videoBlob = await encodeVideo(dummyFrames, fps);
-        set({ generatedVideoBlob: videoBlob });
+        // Create a dummy background image (solid black for now)
+        const backgroundImageBitmap = await createSolidColorImageBitmap(inputImage.width, inputImage.height, "#000000");
+        const backgroundImageUint8 = await imageBitmapToUint8Array(backgroundImageBitmap);
+
+        // 3. Generate layers
+        const { foreground, background } = await generateLayers(
+          originalImageUint8,
+          inputImage.width,
+          inputImage.height,
+          mask.data,
+          mask.width,
+          mask.height,
+          backgroundImageUint8,
+          backgroundImageBitmap.width,
+          backgroundImageBitmap.height
+        );
+
+        // 4. Generate parallax frames
+        const fps = 30;
+        const duration = 5; // seconds
+        const frames = await generateParallaxFrames(
+          foreground,
+          background,
+          inputImage.width,
+          inputImage.height,
+          duration,
+          fps
+        );
+
+        // 5. Encode video
+        const videoBlob = await encodeVideo(frames, fps);
+        set({ generatedVideoBlob: videoBlob, generatedVideoMimeType: videoBlob.type });
 
         set({
           status: "success",

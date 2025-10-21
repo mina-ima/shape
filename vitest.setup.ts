@@ -19,6 +19,28 @@ if (!(globalThis as any).ImageData) {
   } as any;
 }
 
+// Mock Canvas API for tests
+const mockCanvasContext = {
+  drawImage: vi.fn(),
+  getImageData: vi.fn(() => ({ data: new Uint8ClampedArray(4) })), // ダミーのImageDataを返す
+  fillRect: vi.fn(),
+  // 必要に応じて他のメソッドも追加
+};
+
+HTMLCanvasElement.prototype.getContext = vi.fn(() => mockCanvasContext as any);
+
+// Mock createImageBitmap
+if (!(globalThis as any).createImageBitmap) {
+  (globalThis as any).createImageBitmap = vi.fn(async (image) => {
+    // ImageBitmap のモックを返す
+    return {
+      width: image.width || 1,
+      height: image.height || 1,
+      close: vi.fn(),
+    };
+  });
+}
+
 // NOTE:
 // - グローバルな "@/lib/cv" の vi.mock は行いません。
 // - cv は src/lib/cv.ts 側で Promise 兼 名前空間として提供します。

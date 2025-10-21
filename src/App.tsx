@@ -254,7 +254,16 @@ const App: React.FC = () => {
                 const url = URL.createObjectURL(generatedVideoBlob);
                 const a = document.createElement("a");
                 a.href = url;
-                a.download = "parallax_video.webm"; // または適切なファイル名
+                // MIMEタイプに基づいてファイル拡張子を決定
+                let filename = "parallax_video";
+                if (generatedVideoMimeType === "video/mp4") {
+                  filename += ".mp4";
+                } else if (generatedVideoMimeType === "video/webm") {
+                  filename += ".webm";
+                } else {
+                  filename += ".bin"; // 不明な場合は汎用的な拡張子
+                }
+                a.download = filename;
                 document.body.appendChild(a);
                 a.click();
                 document.body.removeChild(a);

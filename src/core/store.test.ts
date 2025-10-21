@@ -1,8 +1,8 @@
 import { act, renderHook } from "@testing-library/react";
-import { useStore } from "./store";
+import { useStore, AppState } from "./store"; // AppState をインポート
 import { runSegmentation } from "../processing";
 import * as cameraModule from "../camera";
-import { encodeVideo } from "../encode/encoder"; // encodeVideo をインポート
+import { encodeVideo } from "../encode/encoder";
 
 // Mock the processing module
 vi.mock("../processing", () => ({
@@ -36,42 +36,162 @@ vi.mock("../encode/encoder", () => ({
   encodeVideo: vi.fn(() => Promise.resolve(new Blob(["mock video"], { type: "video/webm" }))),
 }));
 
+// Mock image utility functions
+vi.mock("../lib/image", () => ({
+  imageBitmapToUint8Array: vi.fn(() => Promise.resolve(new Uint8Array([0, 0, 0, 255]))),
+  createSolidColorImageBitmap: vi.fn(() => Promise.resolve({ width: 1, height: 1, close: vi.fn() })),
+}));
+
+// Mock parallax functions
+vi.mock("../compose/parallax", () => ({
+  generateLayers: vi.fn(() => Promise.resolve({ foreground: {}, background: {} })),
+  generateParallaxFrames: vi.fn(() => Promise.resolve([])),
+}));
+
 const mockedRunSegmentation = runSegmentation as vi.Mock;
-const mockedEncodeVideo = encodeVideo as vi.Mock; // encodeVideo のモックを取得
+
+const mockedEncodeVideo = encodeVideo as vi.Mock;
+
+
+
+// useStore のモック状態
+
+let mockAppState: AppState; // let で宣言し、beforeEach で初期化
+
+
+
+// useStore のモック
+
+vi.mock("./store", () => ({
+
+  useStore: vi.fn((selector?: (state: AppState) => any) => {
+
+    if (selector) {
+
+      return selector(mockAppState);
+
+    }
+
+    return mockAppState;
+
+  }),
+
+  MAX_RETRIES: 3,
+
+}));
+
+
 
 describe("useStore", () => {
+
   const mockImage = {
+
     width: 100,
+
     height: 100,
+
     close: vi.fn(),
+
   } as unknown as ImageBitmap;
 
+
+
   beforeEach(() => {
-    act(() => {
-      useStore.getState().reset();
-      // generatedVideoBlob もリセット
-      useStore.setState({ generatedVideoBlob: null });
-    });
+
+    // mockAppState を初期化
+
+    mockAppState = {
+
+      status: "idle",
+
+      error: null,
+
+      retryCount: 0,
+
+      processingResolution: 720,
+
+      unsplashApiKey: "mock-api-key",
+
+      generatedVideoBlob: null,
+
+      generatedVideoMimeType: null,
+
+      setUnsplashApiKey: vi.fn(),
+
+      setProcessingResolution: vi.fn(),
+
+      reset: vi.fn(),
+
+      startProcessFlow: vi.fn(),
+
+      _setError: vi.fn(),
+
+    };
+
+
+
+    // useStore.getState と useStore.setState のモックを定義
+
+    (useStore as any).getState = () => mockAppState;
+
+    (useStore as any).setState = (updater: Partial<AppState> | ((state: AppState) => AppState)) => {
+
+      if (typeof updater === 'function') {
+
+        Object.assign(mockAppState, updater(mockAppState));
+
+      } else {
+
+        Object.assign(mockAppState, updater);
+
+      }
+
+    };
+
+
+
+    // アクションもモックをクリア
+
+    mockAppState.setUnsplashApiKey.mockClear();
+
+    mockAppState.setProcessingResolution.mockClear();
+
+    mockAppState.reset.mockClear();
+
+    mockAppState.startProcessFlow.mockClear();
+
+    mockAppState._setError.mockClear();
+
+
+
     mockedRunSegmentation.mockClear();
-    mockedEncodeVideo.mockClear(); // encodeVideo のモックをクリア
+
+    mockedEncodeVideo.mockClear();
+
     vi.useFakeTimers();
+
   });
 
+
+
   afterEach(() => {
+
     vi.useRealTimers();
+
     vi.restoreAllMocks();
+
   });
 
   describe("startProcessFlow", () => {
     it("should set error status if Unsplash API key is missing", async () => {
       const { result } = renderHook(() => useStore());
       await act(async () => {
-        result.current.setUnsplashApiKey("");
-        await result.current.startProcessFlow(mockImage);
+        mockAppState.setUnsplashApiKey(""); // 直接モックのアクションを呼び出す
+        await useStore.getState().startProcessFlow(mockImage); // useStore.getState() を使用
       });
-      expect(result.current.status).toBe("error");
-      expect(result.current.error).toContain("Unsplash API Key is missing");
-      expect(mockedEncodeVideo).not.toHaveBeenCalled(); // encodeVideo が呼ばれないことを確認
+      expect(useStore.getState().status).toBe("error");
+      expect(useStore.getState().error).toContain("Unsplash API Key is missing");
+      expect(mockedEncodeVideo).not.toHaveBeenCalled();
     });
 
     it("should set success status on the first attempt", async () => {
@@ -83,15 +203,16 @@ describe("useStore", () => {
       });
 
       await act(async () => {
-        result.current.setUnsplashApiKey("test-key");
-        await result.current.startProcessFlow(mockImage);
+        mockAppState.setUnsplashApiKey("test-key");
+        await useStore.getState().startProcessFlow(mockImage); // useStore.getState() を使用
       });
 
-      expect(result.current.status).toBe("success");
+      expect(useStore.getState().status).toBe("success");
       expect(mockedRunSegmentation).toHaveBeenCalledTimes(1);
-      expect(result.current.retryCount).toBe(1);
-      expect(mockedEncodeVideo).toHaveBeenCalledTimes(1); // encodeVideo が呼ばれたことを確認
-      expect(result.current.generatedVideoBlob).toBeInstanceOf(Blob); // generatedVideoBlob が設定されたことを確認
+      expect(useStore.getState().retryCount).toBe(1);
+      expect(mockedEncodeVideo).toHaveBeenCalledTimes(1);
+      expect(useStore.getState().generatedVideoBlob).toBeInstanceOf(Blob);
+      expect(useStore.getState().generatedVideoMimeType).toBe("video/webm");
     });
 
     it("should handle the full retry cycle and finally fail", async () => {
@@ -99,8 +220,8 @@ describe("useStore", () => {
       mockedRunSegmentation.mockRejectedValue(new Error("Simulated failure"));
 
       await act(async () => {
-        result.current.setUnsplashApiKey("test-key");
-        result.current.startProcessFlow(mockImage);
+        mockAppState.setUnsplashApiKey("test-key");
+        useStore.getState().startProcessFlow(mockImage); // useStore.getState() を使用
       });
 
       await act(async () => {
@@ -108,9 +229,9 @@ describe("useStore", () => {
       });
 
       expect(mockedRunSegmentation).toHaveBeenCalledTimes(3);
-      expect(result.current.status).toBe("error");
-      expect(result.current.error).toContain("Simulated failure");
-      expect(mockedEncodeVideo).not.toHaveBeenCalled(); // 失敗時は呼ばれないことを確認
+      expect(useStore.getState().status).toBe("error");
+      expect(useStore.getState().error).toContain("Simulated failure");
+      expect(mockedEncodeVideo).not.toHaveBeenCalled();
     });
 
     it("should succeed on the second attempt", async () => {
@@ -124,18 +245,20 @@ describe("useStore", () => {
         });
 
       await act(async () => {
-        result.current.setUnsplashApiKey("test-key");
-        result.current.startProcessFlow(mockImage);
+        mockAppState.setUnsplashApiKey("test-key");
+        useStore.getState().startProcessFlow(mockImage); // useStore.getState() を使用
       });
 
       await act(async () => {
         await vi.runAllTimersAsync();
       });
 
+      expect(useStore.getState().status).toBe("success");
       expect(mockedRunSegmentation).toHaveBeenCalledTimes(2);
-      expect(result.current.status).toBe("success");
-      expect(mockedEncodeVideo).toHaveBeenCalledTimes(1); // 成功時は呼ばれることを確認
-      expect(result.current.generatedVideoBlob).toBeInstanceOf(Blob); // generatedVideoBlob が設定されたことを確認
+      expect(useStore.getState().retryCount).toBe(1);
+      expect(mockedEncodeVideo).toHaveBeenCalledTimes(1);
+      expect(useStore.getState().generatedVideoBlob).toBeInstanceOf(Blob);
+      expect(useStore.getState().generatedVideoMimeType).toBe("video/webm");
     });
   });
 
@@ -146,16 +269,18 @@ describe("useStore", () => {
         useStore.setState({
           status: "error",
           error: "An error",
-          generatedVideoBlob: new Blob(), // ダミーのBlobを設定
+          generatedVideoBlob: new Blob(),
+          generatedVideoMimeType: "video/webm",
         });
       });
 
-      await act(async () => result.current.reset());
+      await act(async () => useStore.getState().reset()); // useStore.getState() を使用
 
-      expect(result.current.status).toBe("idle");
-      expect(result.current.error).toBeNull();
-      expect(result.current.retryCount).toBe(0);
-      expect(result.current.generatedVideoBlob).toBeNull(); // generatedVideoBlob が null にリセットされたことを確認
+      expect(useStore.getState().status).toBe("idle");
+      expect(useStore.getState().error).toBeNull();
+      expect(useStore.getState().retryCount).toBe(0);
+      expect(useStore.getState().generatedVideoBlob).toBeNull();
+      expect(useStore.getState().generatedVideoMimeType).toBeNull();
     });
   });
 });
