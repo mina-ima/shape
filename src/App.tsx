@@ -1,5 +1,5 @@
 // src/App.tsx
-import React, { useEffect, useCallback, useState } from "react";
+import React, { useEffect, useCallback, useState, useMemo } from "react";
 import { useStore, MAX_RETRIES } from "./core/store";
 import SegmentationDemo from "./ui/SegmentationDemo"; // 未使用でも将来用に残す
 import licensesMarkdown from "./docs/licenses.md?raw"; // ライセンス文面（Markdown）の生文字列を取り込む
@@ -20,8 +20,15 @@ function parseHashParams(): Record<string, string> {
 }
 
 const App: React.FC = () => {
-  const { status, error, retryCount, processingResolution, unsplashApiKey, generatedVideoBlob, generatedVideoMimeType } =
-    useStore();
+  const {
+    status,
+    error,
+    retryCount,
+    processingResolution,
+    unsplashApiKey,
+    generatedVideoBlob,
+    generatedVideoMimeType,
+  } = useStore();
   const setUnsplashApiKey = useStore((s) => s.setUnsplashApiKey);
   const startProcessFlow = useStore((s) => s.startProcessFlow);
   const reset = useStore((s) => s.reset);
@@ -138,6 +145,23 @@ const App: React.FC = () => {
       ? processingResSnapshot
       : processingResolution;
 
+  // ---- 生成結果の動画をインライン再生するための ObjectURL ----
+  const videoObjectUrl = useMemo(() => {
+    if (!generatedVideoBlob) return null;
+    try {
+      return URL.createObjectURL(generatedVideoBlob);
+    } catch {
+      return null;
+    }
+  }, [generatedVideoBlob]);
+
+  // ObjectURL のクリーンアップ
+  useEffect(() => {
+    return () => {
+      if (videoObjectUrl) URL.revokeObjectURL(videoObjectUrl);
+    };
+  }, [videoObjectUrl]);
+
   return (
     <div style={{ maxWidth: 720, margin: "40px auto", fontFamily: "system-ui" }}>
       {(() => {
@@ -248,6 +272,30 @@ const App: React.FC = () => {
       {!isProcessingUI && status === "success" && (
         <div style={{ marginTop: 16 }}>
           <h3>成功!</h3>
+
+          {/* ▼ ここで動画をインライン再生 */}
+          {generatedVideoBlob && videoObjectUrl && (
+            <div style={{ margin: "12px 0" }}>
+              <video
+                key={videoObjectUrl} // Blob更新時に確実にソースを再読み込み
+                controls
+                playsInline
+                style={{ width: "100%", height: "auto", background: "#000", borderRadius: 8 }}
+              >
+                <source
+                  src={videoObjectUrl}
+                  type={generatedVideoMimeType || generatedVideoBlob.type || "video/webm"}
+                />
+                ブラウザが動画の再生に対応していません。
+              </video>
+              <div style={{ marginTop: 6, fontSize: 12, color: "#666" }}>
+                MIME:{" "}
+                <code>{generatedVideoMimeType || generatedVideoBlob.type || "(unknown)"}</code>
+              </div>
+            </div>
+          )}
+
+          {/* ダウンロードは別ボタンで残す */}
           {generatedVideoBlob && (
             <button
               onClick={() => {
@@ -256,9 +304,10 @@ const App: React.FC = () => {
                 a.href = url;
                 // MIMEタイプに基づいてファイル拡張子を決定
                 let filename = "parallax_video";
-                if (generatedVideoMimeType === "video/mp4") {
+                const mt = generatedVideoMimeType || generatedVideoBlob.type;
+                if (mt === "video/mp4") {
                   filename += ".mp4";
-                } else if (generatedVideoMimeType === "video/webm") {
+                } else if (mt === "video/webm") {
                   filename += ".webm";
                 } else {
                   filename += ".bin"; // 不明な場合は汎用的な拡張子
@@ -441,8 +490,7 @@ const CameraModal: React.FC<{
           if (v.readyState >= 1) {
             log("metadata already loaded (readyState=", v.readyState, "). resolving promise.");
             resolve();
-          }
-          else {
+          } else {
             v.onloadedmetadata = () => {
               log("onloadedmetadata event fired. resolving promise.");
               resolve();
@@ -453,11 +501,19 @@ const CameraModal: React.FC<{
         log("metadata loaded. calling video.play()...");
         try {
           await v.play();
-          log("video.play() successfully awaited.", "readyState=", String(v.readyState), "size=", v.videoWidth, "x", v.videoHeight);
+          log(
+            "video.play() successfully awaited.",
+            "readyState=",
+            String(v.readyState),
+            "size=",
+            v.videoWidth,
+            "x",
+            v.videoHeight
+          );
         } catch (pe: any) {
           log("video.play() failed on first attempt:", pe?.name || String(pe));
           setErrorMsg("映像の再生開始に失敗。リトライします...");
-          await new Promise(res => setTimeout(res, 100)); // 少し待つ
+          await new Promise((res) => setTimeout(res, 100)); // 少し待つ
           try {
             await v.play();
             log("video.play() successfully awaited on retry.");
