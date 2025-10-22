@@ -107,6 +107,20 @@ function ensureUint8Clamped(buf: Uint8Array | Uint8ClampedArray): Uint8ClampedAr
   return buf instanceof Uint8ClampedArray ? buf : new Uint8ClampedArray(buf.buffer, buf.byteOffset, buf.byteLength);
 }
 
+/** TSのlib.domで ImageData コンストラクタが ArrayBuffer を要求するケース対策。
+ *  常に新しい ArrayBuffer へコピーしてから ImageData を生成する。 */
+function makeImageData(data: Uint8ClampedArray, w: number, h: number): ImageData {
+  const expectedLen = w * h * 4;
+  const copy = new Uint8ClampedArray(expectedLen);
+  if (data.length === expectedLen) {
+    copy.set(data);
+  } else {
+    // 長さが異なる/チャンネル変換直後などは切り詰め or 0埋め
+    copy.set(data.subarray(0, Math.min(expectedLen, data.length)));
+  }
+  return new ImageData(copy, w, h);
+}
+
 function expandToRgba(buf: Uint8ClampedArray, w: number, h: number, channels: number): Uint8ClampedArray {
   // channels=1(グレースケール)や3(RGB)をRGBAへ拡張
   if (channels === 4) return buf;
@@ -171,7 +185,7 @@ async function toDrawable(
     const data = src instanceof ImageData ? src.data : ensureUint8Clamped((src as any).data);
     const channels = (src as any).channels ?? 4;
     const rgba = channels === 4 ? data : expandToRgba(data, w, h, channels);
-    const id = new ImageData(rgba, w, h);
+    const id = makeImageData(rgba, w, h);
     ctx.putImageData(id, 0, 0);
     return c;
   }
@@ -186,7 +200,7 @@ async function toDrawable(
     c.width = w; c.height = h;
     const ctx = c.getContext('2d');
     if (!ctx) throw new Error('2D context unavailable');
-    const id = new ImageData(rgba, w, h);
+    const id = makeImageData(rgba, w, h);
     ctx.putImageData(id, 0, 0);
     return c;
   }
@@ -203,7 +217,7 @@ async function toDrawable(
       c.width = w; c.height = h;
       const ctx = c.getContext('2d');
       if (!ctx) throw new Error('2D context unavailable');
-      const id = new ImageData(rgba, w, h);
+      const id = makeImageData(rgba, w, h);
       ctx.putImageData(id, 0, 0);
       return c;
     }
