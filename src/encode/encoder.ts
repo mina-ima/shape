@@ -69,13 +69,14 @@ type AnyFrame =
   | ImageData
   | ImageDataLike
   | Uint8Array
+  | Uint16Array
+  | Float32Array
   | ArrayBuffer
+  | number[]
   | Blob
   | string
-  | { pixels: Uint8Array | Uint8ClampedArray; width: number; height: number; channels?: number }
-  | { data: Uint8Array | Uint8ClampedArray; width: number; height: number; channels?: number }
-  | { url?: string; src?: string }
-  | { canvas?: any; bitmap?: any; image?: any; video?: any }; // ラッパー系
+  | { pixels?: any; data?: any; width?: number; height?: number; channels?: number; url?: string; src?: string }
+  | { canvas?: any; bitmap?: any | Promise<any>; image?: any; video?: any }; // ラッパー系
 
 function isCanvasImageSource(x: unknown): x is CanvasImageSource {
   const g: any = globalThis as any;
@@ -103,8 +104,19 @@ function isImageDataLike(x: any): x is ImageDataLike {
   );
 }
 
-function ensureUint8Clamped(buf: Uint8Array | Uint8ClampedArray): Uint8ClampedArray {
-  return buf instanceof Uint8ClampedArray ? buf : new Uint8ClampedArray(buf.buffer, buf.byteOffset, buf.byteLength);
+function ensureUint8Clamped(buf: ArrayLike<number>): Uint8ClampedArray {
+  // Float32Array/Uint16Array/number[] を 0..255 にクリップして変換
+  if (buf instanceof Uint8ClampedArray) return buf;
+  if (buf instanceof Uint8Array) return new Uint8ClampedArray(buf.buffer, buf.byteOffset, buf.byteLength);
+  const out = new Uint8ClampedArray(buf.length);
+  for (let i = 0; i < out.length; i++) {
+    let v = (buf as any)[i] ?? 0;
+    if (typeof v !== 'number') v = Number(v) || 0;
+    if (v > 255) v = 255;
+    else if (v < 0) v = 0;
+    out[i] = v;
+  }
+  return out;
 }
 
 /** TSのlib.domで ImageData コンストラクタが ArrayBuffer を要求するケース対策。
@@ -165,14 +177,29 @@ async function toDrawable(
 
   // ラッパー解体
   if ((src as any)?.canvas && isCanvasImageSource((src as any).canvas)) return (src as any).canvas;
+
   if ((src as any)?.bitmap) {
-    const b = (src as any).bitmap;
+    let b = (src as any).bitmap;
+    if (b && typeof (b as Promise<any>)?.then === 'function') {
+      b = await b; // Promise<ImageBitmap> を解決
+    }
     if (isCanvasImageSource(b)) return b;
-    // OffscreenCanvas#transferToImageBitmapの戻りなど
-    if (b && typeof b === 'object' && 'close' in b) return b as CanvasImageSource;
+    if (b && typeof b === 'object' && 'close' in b) return b as CanvasImageSource; // VideoFrameライク
   }
+
   if ((src as any)?.image && isCanvasImageSource((src as any).image)) return (src as any).image;
   if ((src as any)?.video && isCanvasImageSource((src as any).video)) return (src as any).video;
+
+  // 「Canvasライク」（別Realm/型不一致だが描画可能）
+  if (
+    src &&
+    typeof src === 'object' &&
+    typeof (src as any).width === 'number' &&
+    typeof (src as any).height === 'number' &&
+    (typeof (src as any).getContext === 'function' || typeof (src as any).toDataURL === 'function')
+  ) {
+    return src as any;
+  }
 
   // ImageData / ImageDataLike
   if (src instanceof ImageData || isImageDataLike(src)) {
@@ -182,19 +209,34 @@ async function toDrawable(
     c.width = w; c.height = h;
     const ctx = c.getContext('2d');
     if (!ctx) throw new Error('2D context unavailable');
-    const data = src instanceof ImageData ? src.data : ensureUint8Clamped((src as any).data);
+    const data =
+      src instanceof ImageData
+        ? src.data
+        : ensureUint8Clamped((src as any).data as Uint8ClampedArray | Uint8Array);
     const channels = (src as any).channels ?? 4;
-    const rgba = channels === 4 ? data : expandToRgba(data, w, h, channels);
-    const id = makeImageData(rgba, w, h);
+    const rgba = channels === 4 ? data : expandToRgba(ensureUint8Clamped(data), w, h, channels);
+    const id = makeImageData(ensureUint8Clamped(rgba), w, h);
     ctx.putImageData(id, 0, 0);
     return c;
   }
 
-  // Uint8Array / ArrayBuffer（RGBA想定）
-  if (src instanceof Uint8Array || src instanceof ArrayBuffer) {
+  // TypedArray / ArrayBuffer（RGBA想定、もしくは後段で拡張）
+  if (
+    src instanceof Uint8Array ||
+    src instanceof Uint8ClampedArray ||
+    src instanceof Uint16Array ||
+    src instanceof Float32Array ||
+    src instanceof ArrayBuffer ||
+    Array.isArray(src) // number[]
+  ) {
     const w = fallbackSize?.width ?? 720;
     const h = fallbackSize?.height ?? 1280;
-    const bytes = src instanceof Uint8Array ? src : new Uint8Array(src);
+    const bytes =
+      src instanceof ArrayBuffer
+        ? new Uint8Array(src)
+        : src instanceof Float32Array || src instanceof Uint16Array || Array.isArray(src)
+        ? ensureUint8Clamped(src as any)
+        : (src as Uint8Array | Uint8ClampedArray);
     const rgba = ensureUint8Clamped(bytes);
     const c = document.createElement('canvas');
     c.width = w; c.height = h;
@@ -210,7 +252,9 @@ async function toDrawable(
     const maybe = src as any;
     if ((maybe.pixels || maybe.data) && typeof maybe.width === 'number' && typeof maybe.height === 'number') {
       const w = maybe.width, h = maybe.height;
-      const buf = ensureUint8Clamped(maybe.pixels ?? maybe.data);
+      const raw = maybe.pixels ?? maybe.data;
+      // ArrayBufferView/配列すべて受理
+      const buf = ArrayBuffer.isView(raw) || Array.isArray(raw) ? ensureUint8Clamped(raw as any) : ensureUint8Clamped(new Uint8Array(raw));
       const channels = maybe.channels ?? 4;
       const rgba = channels === 4 ? buf : expandToRgba(buf, w, h, channels);
       const c = document.createElement('canvas');
@@ -221,7 +265,7 @@ async function toDrawable(
       ctx.putImageData(id, 0, 0);
       return c;
     }
-    // {url|src} 文字列を持つ場合（http/https/blob/data:image）
+    // {url|src} 文字列を持つ場合（http/https/blob/data:）
     const rawUrl = (maybe.url ?? maybe.src) as string | undefined;
     if (typeof rawUrl === 'string') {
       const img = await loadImage(rawUrl);
@@ -242,7 +286,8 @@ async function toDrawable(
   // 文字列（dataURL / http(s) / blob:）
   if (typeof src === 'string') {
     const s = src as string;
-    if (s.startsWith('data:image:') || s.startsWith('data:image/')) {
+    if (s.startsWith('data:')) {
+      // image/* 以外でも画像データなら描画可能なので一旦トライ
       return await loadImage(s);
     }
     if (s.startsWith('blob:') || s.startsWith('http://') || s.startsWith('https://')) {
