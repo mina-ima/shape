@@ -5,7 +5,7 @@
     "moduleResolution": "bundler",
     "target": "ES2020",
     "jsx": "react-jsx",
-    "lib": ["ES2020", "DOM"],
+    "lib": ["ES2020", "DOM", "DOM.Iterable", "WebWorker"],
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"]
@@ -17,7 +17,8 @@
       "vite/client",
       "vitest",
       "@testing-library/jest-dom",
-      "vite-plugin-pwa/client"
+      "vite-plugin-pwa/client",
+      "@ffmpeg/ffmpeg"
     ]
   },
   "include": ["src", "vite.config.ts", "index.html"],

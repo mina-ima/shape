@@ -1,6 +1,6 @@
 // src/encode/ffmpeg.ts
 // ffmpeg.wasm を使ってフレーム列 (cv.Mat[]) を動画 Blob にエンコードする。
-// 方針：希望 MIME（"video/webm" | "video/mp4"）を優先 → 失敗なら自動フォールバック。
+// 希望 MIME（"video/webm" | "video/mp4"）を優先 → 失敗時フォールバック。
 // 互換性重視のパラメータ（CFR, yuv420p, 無音）で出力。
 
 import cv from "@techstark/opencv-js";
@@ -15,7 +15,10 @@ function toArrayBuffer(u8: Uint8Array): ArrayBuffer {
   return buf;
 }
 
-/** Mat(RGB/RGBA/Gray) → PNG(Uint8Array) へ変換（ffmpeg FS 用） */
+/** Mat(RGB/RGBA/Gray) → PNG(Uint8Array) へ変換（ffmpeg FS 用）
+ * 重要：ImageData に渡す配列は必ず「自前確保の ArrayBuffer 」を裏に持つ Uint8ClampedArray を使う。
+ * これで Vercel の tsc が期待する ImageData オーバーロードに一致させる。
+ */
 async function matToPngBytes(mat: cv.Mat): Promise<Uint8Array> {
   const w = mat.cols;
   const h = mat.rows;
@@ -43,23 +46,28 @@ async function matToPngBytes(mat: cv.Mat): Promise<Uint8Array> {
   const isRGBA = srcU8.length === w * h * 4;
   const isRGB = srcU8.length === w * h * 3;
 
-  let rgba: Uint8ClampedArray;
+  // ★ ArrayBufferLike 問題を避けるため、毎回「自前の ArrayBuffer」を確保してから詰める
+  const rgbaAB = new ArrayBuffer(w * h * 4);
+  const rgba = new Uint8ClampedArray(rgbaAB);
 
   if (isRGBA) {
-    // 型を確実に Uint8ClampedArray に固定
-    rgba = new Uint8ClampedArray(srcU8); // コピー生成（.buffer を直接使わない）
+    // そのままコピー
+    rgba.set(srcU8);
   } else if (isRGB) {
-    rgba = new Uint8ClampedArray(w * h * 4);
-    for (let i = 0, j = 0; i < srcU8.length; i += 3, j += 4) {
-      rgba[j] = srcU8[i];
-      rgba[j + 1] = srcU8[i + 1];
-      rgba[j + 2] = srcU8[i + 2];
-      rgba[j + 3] = 255;
+    // RGB → RGBA
+    let si = 0;
+    let di = 0;
+    const len = srcU8.length;
+    while (si < len) {
+      rgba[di++] = srcU8[si++]; // R
+      rgba[di++] = srcU8[si++]; // G
+      rgba[di++] = srcU8[si++]; // B
+      rgba[di++] = 255;         // A
     }
   } else {
     // グレースケールなど
-    rgba = new Uint8ClampedArray(w * h * 4);
-    for (let i = 0, j = 0; i < srcU8.length; i += 1, j += 4) {
+    const len = srcU8.length;
+    for (let i = 0, j = 0; i < len; i++, j += 4) {
       const v = srcU8[i];
       rgba[j] = v;
       rgba[j + 1] = v;
@@ -74,8 +82,8 @@ async function matToPngBytes(mat: cv.Mat): Promise<Uint8Array> {
   // Canvas → PNG バイト列
   if ("convertToBlob" in canvas) {
     const blob = await (canvas as OffscreenCanvas).convertToBlob({ type: "image/png" });
-    const arr = await blob.arrayBuffer();
-    return new Uint8Array(arr);
+    const arr = await blob.arrayBuffer(); // ArrayBuffer
+    return new Uint8Array(arr);           // Uint8Array に変換
   } else {
     const c = canvas as HTMLCanvasElement;
     const dataUrl = c.toDataURL("image/png");
@@ -153,8 +161,7 @@ export async function encodeWithFFmpeg(
     ];
     await ffmpeg.exec(args);
     const u8 = (await ffmpeg.readFile(out)) as Uint8Array;
-    // BlobPart に ArrayBuffer を渡すと型がより安定（ArrayBufferLike問題を回避）
-    const ab: ArrayBuffer = toArrayBuffer(u8);
+    const ab: ArrayBuffer = toArrayBuffer(u8); // BlobPart は ArrayBuffer を渡す
     return new Blob([ab], { type: "video/webm" });
   };
 
