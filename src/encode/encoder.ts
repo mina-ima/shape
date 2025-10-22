@@ -60,37 +60,45 @@ function normalizeOptions(opts: EncodeInput): EncodeOptions {
 
 /* ---------------- フレーム正規化（drawImage可能に変換） ---------------- */
 
+type ImageDataLike = { data: Uint8ClampedArray; width: number; height: number };
 type AnyFrame =
   | CanvasImageSource
   | ImageData
+  | ImageDataLike
   | Blob
-  | { data: Uint8ClampedArray; width: number; height: number }; // ImageDataライク
+  | string; // ← ★ dataURL 等の文字列も許容
+
+function isCanvasImageSource(x: unknown): x is CanvasImageSource {
+  const g: any = globalThis as any;
+  return (
+    (g.HTMLCanvasElement && x instanceof g.HTMLCanvasElement) ||
+    (g.ImageBitmap && x instanceof g.ImageBitmap) ||
+    (g.HTMLImageElement && x instanceof g.HTMLImageElement) ||
+    (g.HTMLVideoElement && x instanceof g.HTMLVideoElement) ||
+    (g.OffscreenCanvas && x instanceof g.OffscreenCanvas) ||
+    (g.SVGImageElement && x instanceof g.SVGImageElement) ||
+    (g.VideoFrame && x instanceof g.VideoFrame)
+  );
+}
+
+function isImageDataLike(x: any): x is ImageDataLike {
+  return (
+    x &&
+    x.data instanceof Uint8ClampedArray &&
+    typeof x.width === 'number' &&
+    typeof x.height === 'number'
+  );
+}
 
 async function toDrawable(
   src: AnyFrame,
   fallbackSize?: { width: number; height: number },
 ): Promise<CanvasImageSource> {
   // すでにCanvasImageSourceならそのまま
-  if (
-    src instanceof HTMLCanvasElement ||
-    src instanceof ImageBitmap ||
-    src instanceof HTMLImageElement ||
-    src instanceof HTMLVideoElement ||
-    (globalThis as any).OffscreenCanvas?.prototype?.isPrototypeOf(src) ||
-    (globalThis as any).SVGImageElement?.prototype?.isPrototypeOf(src) ||
-    // VideoFrame は型定義に無いことがあるので any で判定
-    (typeof (globalThis as any).VideoFrame !== 'undefined' && src instanceof (globalThis as any).VideoFrame)
-  ) {
-    return src as CanvasImageSource;
-  }
+  if (isCanvasImageSource(src)) return src;
 
   // ImageData or それに準ずるデータ → Canvasに描画して返す
-  const asImageDataLike =
-    (src as any)?.data instanceof Uint8ClampedArray &&
-    typeof (src as any)?.width === 'number' &&
-    typeof (src as any)?.height === 'number';
-
-  if (src instanceof ImageData || asImageDataLike) {
+  if (src instanceof ImageData || isImageDataLike(src)) {
     const w = (src as any).width ?? fallbackSize?.width ?? 720;
     const h = (src as any).height ?? fallbackSize?.height ?? 1280;
     const c = document.createElement('canvas');
@@ -109,16 +117,19 @@ async function toDrawable(
     return bmp;
   }
 
-  // 最終手段：toDataURLを通す（srcがdataURL文字列等の可能性）
-  if (typeof src === 'string' && src.startsWith('data:image/')) {
-    const img = new Image();
-    img.decoding = 'async';
-    const p = new Promise<HTMLImageElement>((res, rej) => {
-      img.onload = () => res(img);
-      img.onerror = rej;
-    });
-    img.src = src;
-    return p;
+  // dataURL 文字列 → HTMLImageElement
+  if (typeof src === 'string') {
+    const s = src as string;
+    if (s.startsWith('data:image/')) {
+      const img = new Image();
+      img.decoding = 'async';
+      const p = new Promise<HTMLImageElement>((res, rej) => {
+        img.onload = () => res(img);
+        img.onerror = rej;
+      });
+      img.src = s;
+      return p;
+    }
   }
 
   // どうしても判定できない場合は、TypeErrorを投げて上位で別経路にフォールバック
@@ -131,7 +142,7 @@ async function normalizeFrames(frames: AnyFrame[]): Promise<CanvasImageSource[]>
   const out: CanvasImageSource[] = [];
   for (const f of frames) {
     // eslint-disable-next-line no-await-in-loop
-    const d = await toDrawable(f as any, size);
+    const d = await toDrawable(f, size);
     out.push(d);
   }
   return out;
@@ -232,11 +243,10 @@ async function encodeWithMediaRecorder(
   const frameInterval = Math.max(1, Math.round(1000 / fps));
   for (let i = 0; i < frames.length; i++) {
     ctx.clearRect(0, 0, width, height);
-    // VideoFrame 型のときは drawImage が重い端末もあるので try/catch
     try {
       ctx.drawImage(frames[i] as any, 0, 0, width, height);
-    } catch (err) {
-      // どうしてもだめなら ImageBitmap 経由
+    } catch {
+      // 念のための二重防御（ここに来ることは通常ない）
       // eslint-disable-next-line no-await-in-loop
       const bmp = await toDrawable(frames[i] as any, { width, height });
       ctx.drawImage(bmp as any, 0, 0, width, height);
