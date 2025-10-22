@@ -1,19 +1,26 @@
 // src/encode/ffmpeg.ts
-// ffmpeg.wasm を用いてフレーム列 (cv.Mat[]) を動画 Blob にエンコードする。
-// ポイント：
-// - まずリクエストされた MIME（"video/webm" | "video/mp4"）を試行
-// - 失敗したら自動でもう一方にフォールバック（libx264 非搭載や端末差を吸収）
-// - 共通設定：CFR、yuv420p、無音（-an）、出力後にFS掃除
+// ffmpeg.wasm を使ってフレーム列 (cv.Mat[]) を動画 Blob にエンコードする。
+// 方針：希望 MIME（"video/webm" | "video/mp4"）を優先 → 失敗なら自動フォールバック。
+// 互換性重視のパラメータ（CFR, yuv420p, 無音）で出力。
 
 import cv from "@techstark/opencv-js";
 import { FFmpeg } from "@ffmpeg/ffmpeg";
-import { fetchFile } from "@ffmpeg/util";
 
-// Mat(RGBA/RGB) → PNG(Uint8Array) へ変換（ffmpeg FS に書き込むため）
+/* ---------------- 型安全ユーティリティ ---------------- */
+
+/** Uint8Array -> ArrayBuffer（ArrayBufferLike を確実に ArrayBuffer に変換） */
+function toArrayBuffer(u8: Uint8Array): ArrayBuffer {
+  const buf = new ArrayBuffer(u8.byteLength);
+  new Uint8Array(buf).set(u8);
+  return buf;
+}
+
+/** Mat(RGB/RGBA/Gray) → PNG(Uint8Array) へ変換（ffmpeg FS 用） */
 async function matToPngBytes(mat: cv.Mat): Promise<Uint8Array> {
   const w = mat.cols;
   const h = mat.rows;
-  // OffscreenCanvas が使えれば優先
+
+  // OffscreenCanvas があれば優先
   const canvas: OffscreenCanvas | HTMLCanvasElement =
     typeof OffscreenCanvas !== "undefined"
       ? new OffscreenCanvas(w, h)
@@ -31,46 +38,44 @@ async function matToPngBytes(mat: cv.Mat): Promise<Uint8Array> {
 
   if (!ctx) throw new Error("Canvas 2D context not available.");
 
-  // Mat のチャンネル数を確認（3=RGB、4=RGBA）
-  const channels = (mat.channels && typeof mat.channels === "function")
-    ? mat.channels()
-    : (mat.cols * mat.rows * 4 === (mat.data?.length ?? 0) ? 4 : 3);
+  // OpenCV.js の Mat は多くが RGBA。安全側に RGB/Gray も吸収。
+  const srcU8 = mat.data as unknown as Uint8Array;
+  const isRGBA = srcU8.length === w * h * 4;
+  const isRGB = srcU8.length === w * h * 3;
 
-  let rgbaU8: Uint8ClampedArray;
+  let rgba: Uint8ClampedArray;
 
-  if (channels === 4) {
-    // そのまま RGBA として取り扱い
-    rgbaU8 = new Uint8ClampedArray(mat.data as unknown as ArrayBufferLike);
-  } else if (channels === 3) {
-    // RGB → RGBA に拡張
-    const src = mat.data as unknown as Uint8Array;
-    rgbaU8 = new Uint8ClampedArray(w * h * 4);
-    for (let i = 0, j = 0; i < src.length; i += 3, j += 4) {
-      rgbaU8[j] = src[i];
-      rgbaU8[j + 1] = src[i + 1];
-      rgbaU8[j + 2] = src[i + 2];
-      rgbaU8[j + 3] = 255;
+  if (isRGBA) {
+    // 型を確実に Uint8ClampedArray に固定
+    rgba = new Uint8ClampedArray(srcU8); // コピー生成（.buffer を直接使わない）
+  } else if (isRGB) {
+    rgba = new Uint8ClampedArray(w * h * 4);
+    for (let i = 0, j = 0; i < srcU8.length; i += 3, j += 4) {
+      rgba[j] = srcU8[i];
+      rgba[j + 1] = srcU8[i + 1];
+      rgba[j + 2] = srcU8[i + 2];
+      rgba[j + 3] = 255;
     }
   } else {
-    // 想定外：グレースケール等は簡易に RGBA へ
-    const src = mat.data as unknown as Uint8Array;
-    rgbaU8 = new Uint8ClampedArray(w * h * 4);
-    for (let i = 0, j = 0; i < src.length; i += 1, j += 4) {
-      const v = src[i];
-      rgbaU8[j] = v;
-      rgbaU8[j + 1] = v;
-      rgbaU8[j + 2] = v;
-      rgbaU8[j + 3] = 255;
+    // グレースケールなど
+    rgba = new Uint8ClampedArray(w * h * 4);
+    for (let i = 0, j = 0; i < srcU8.length; i += 1, j += 4) {
+      const v = srcU8[i];
+      rgba[j] = v;
+      rgba[j + 1] = v;
+      rgba[j + 2] = v;
+      rgba[j + 3] = 255;
     }
   }
 
-  const imageData = new ImageData(rgbaU8, w, h);
+  const imageData = new ImageData(rgba, w, h);
   (ctx as CanvasRenderingContext2D).putImageData(imageData, 0, 0);
 
   // Canvas → PNG バイト列
   if ("convertToBlob" in canvas) {
     const blob = await (canvas as OffscreenCanvas).convertToBlob({ type: "image/png" });
-    return new Uint8Array(await blob.arrayBuffer());
+    const arr = await blob.arrayBuffer();
+    return new Uint8Array(arr);
   } else {
     const c = canvas as HTMLCanvasElement;
     const dataUrl = c.toDataURL("image/png");
@@ -82,7 +87,7 @@ async function matToPngBytes(mat: cv.Mat): Promise<Uint8Array> {
   }
 }
 
-// 出力・一時ファイルの掃除
+/** FS の掃除 */
 function fsList(n: number): string[] {
   const frames = Array.from({ length: n }, (_, i) => `frame${String(i + 1).padStart(4, "0")}.png`);
   return frames.concat(["out.webm", "out.mp4"]);
@@ -96,6 +101,8 @@ async function cleanupFf(files: string[], ffmpeg: FFmpeg) {
     }
   }
 }
+
+/* ---------------- 本体：ffmpeg でエンコード ---------------- */
 
 /**
  * ffmpeg でエンコードを実行。
@@ -124,10 +131,8 @@ export async function encodeWithFFmpeg(
     await ffmpeg.writeFile(name, png);
   }
 
-  // それぞれの出力関数
-  const makeWebM = async () => {
+  const makeWebM = async (): Promise<Blob> => {
     const out = "out.webm";
-    // 互換重視：libvpx-vp8 / yuv420p / CFR / 無音
     const args = [
       "-framerate",
       String(fps),
@@ -147,14 +152,14 @@ export async function encodeWithFFmpeg(
       out,
     ];
     await ffmpeg.exec(args);
-    const data = (await ffmpeg.readFile(out)) as Uint8Array;
-    return new Blob([data], { type: "video/webm" });
+    const u8 = (await ffmpeg.readFile(out)) as Uint8Array;
+    // BlobPart に ArrayBuffer を渡すと型がより安定（ArrayBufferLike問題を回避）
+    const ab: ArrayBuffer = toArrayBuffer(u8);
+    return new Blob([ab], { type: "video/webm" });
   };
 
-  const makeMP4 = async () => {
+  const makeMP4 = async (): Promise<Blob> => {
     const out = "out.mp4";
-    // 互換重視：libx264 / baseline / yuv420p / faststart
-    // ※ ビルドに libx264 が含まれていない場合はここでエラーになる
     const args = [
       "-framerate",
       String(fps),
@@ -172,11 +177,12 @@ export async function encodeWithFFmpeg(
       out,
     ];
     await ffmpeg.exec(args);
-    const data = (await ffmpeg.readFile(out)) as Uint8Array;
-    return new Blob([data], { type: "video/mp4" });
+    const u8 = (await ffmpeg.readFile(out)) as Uint8Array;
+    const ab: ArrayBuffer = toArrayBuffer(u8);
+    return new Blob([ab], { type: "video/mp4" });
   };
 
-  // 実行
+  // 実行（希望 → 逆順にフォールバック、最後に念押し WebM）
   let lastErr: unknown = null;
   try {
     for (const p of plans) {
@@ -189,15 +195,13 @@ export async function encodeWithFFmpeg(
         // 次案にフォールバック
       }
     }
-    // 念のため WebM を強制再試行（libx264 非搭載ビルド対策）
+    // libx264 非搭載ビルド対策：最後に WebM を強制再挑戦
     const fallbackBlob = await makeWebM();
     await cleanupFf(fsList(frames.length), ffmpeg);
     return fallbackBlob;
   } catch (e) {
     lastErr = e;
     await cleanupFf(fsList(frames.length), ffmpeg);
-    throw new Error(
-      `ffmpeg.wasm failed for both MP4 and WebM. last error: ${String(lastErr)}`
-    );
+    throw new Error(`ffmpeg.wasm failed for both MP4 and WebM. last error: ${String(lastErr)}`);
   }
 }
