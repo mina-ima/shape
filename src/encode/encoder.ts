@@ -46,12 +46,12 @@ export function getPreferredMimeType(): Mime {
   return isIOS() ? 'video/mp4' : 'video/webm';
 }
 
-function alternativeOf(mime: Mime): Mime {
-  return mime === 'video/webm' ? 'video/mp4' : 'video/webm';
+function extFromMime(mimeType: string): 'webm' | 'mp4' {
+  return mimeType.startsWith('video/mp4') ? 'mp4' : 'webm';
 }
 
-function extOf(mime: Mime): 'webm' | 'mp4' {
-  return mime === 'video/webm' ? 'webm' : 'mp4';
+function altPreferred(mime: Mime): Mime {
+  return mime === 'video/webm' ? 'video/mp4' : 'video/webm';
 }
 
 function normalizeOptions(opts: EncodeInput): EncodeOptions {
@@ -336,27 +336,27 @@ export async function encodeVideoWithMeta(
   if (!frames?.length) throw new Error('encodeVideo: frames is empty');
 
   const primary: Mime = preferredMime ?? getPreferredMimeType();
-  const secondary: Mime = alternativeOf(primary);
+  const secondary: Mime = altPreferred(primary);
 
-  // 1) MediaRecorder（captureStream必須）— lazy 変換 + 再生検証
+  // 1) MediaRecorder（captureStream必須）— 実出力の type を採用して検証
   if (typeof (globalThis as any).MediaRecorder === 'function' && canCaptureStream()) {
     try {
-      const blob = await encodeWithMediaRecorder(frames, fps, primary);
-      const ok = await probePlayback(blob, primary);
-      if (ok) {
-        console.log(`Encoded with MediaRecorder as ${primary}`);
-        return { blob, filename: `output.${extOf(primary)}`, mime: primary };
+      const blob1 = await encodeWithMediaRecorder(frames, fps, primary);
+      const ok1 = await probePlayback(blob1);
+      if (ok1) {
+        const ext = extFromMime(blob1.type || primary);
+        return { blob: blob1, filename: `output.${ext}`, mime: (ext === 'mp4' ? 'video/mp4' : 'video/webm') };
       }
       console.warn('Playback probe failed. Retrying with alternate MediaRecorder settings…');
       const blob2 = await encodeWithMediaRecorder(frames, fps, secondary);
-      const ok2 = await probePlayback(blob2, secondary);
+      const ok2 = await probePlayback(blob2);
       if (ok2) {
-        console.log(`Encoded with MediaRecorder as ${secondary}`);
-        return { blob: blob2, filename: `output.${extOf(secondary)}`, mime: secondary };
+        const ext = extFromMime(blob2.type || secondary);
+        return { blob: blob2, filename: `output.${ext}`, mime: (ext === 'mp4' ? 'video/mp4' : 'video/webm') };
       }
       // → ffmpeg.wasm へ
     } catch (e1) {
-      console.warn(`MediaRecorder path failed`, e1);
+      console.warn('MediaRecorder path failed', e1);
       // → ffmpeg.wasm
     }
   } else {
@@ -366,42 +366,41 @@ export async function encodeVideoWithMeta(
   // 2) ffmpeg.wasm（依存があれば）
   try {
     const blob = await encodeWithFFmpeg(frames, fps, primary);
-    console.log(`Encoded with ffmpeg.wasm as ${primary}`);
-    return { blob, filename: `output.${extOf(primary)}`, mime: primary };
+    const ext = extFromMime(blob.type || primary);
+    return { blob, filename: `output.${ext}`, mime: (ext === 'mp4' ? 'video/mp4' : 'video/webm') };
   } catch (e3) {
     console.warn(`ffmpeg.wasm failed with ${primary}`, e3);
     const blob = await encodeWithFFmpeg(frames, fps, secondary);
-    console.log(`Encoded with ffmpeg.wasm as ${secondary}`);
-    return { blob, filename: `output.${extOf(secondary)}`, mime: secondary };
+    const ext = extFromMime(blob.type || secondary);
+    return { blob, filename: `output.${ext}`, mime: (ext === 'mp4' ? 'video/mp4' : 'video/webm') };
   }
 }
 
-/* ---------------- MediaRecorder 実装（VP8優先＋検証） ---------------- */
+/* ---------------- MediaRecorder 実装（VP8優先＋実 type を採用） ---------------- */
 
 function pickMediaRecorderMime(target: Mime): string | undefined {
   const candidates =
     target === 'video/webm'
       ? [
-          'video/webm;codecs=vp8', // ★ 互換性最優先
+          'video/webm;codecs=vp8', // 互換性が高い
           'video/webm;codecs=vp9',
           'video/webm',
         ]
       : [
-          // Android Chrome では mp4 を MediaRecorder が未対応のことが多い
+          // Android Chrome は MediaRecorder の MP4 未対応が多い（isTypeSupported で弾かれることがある）
           'video/mp4;codecs=avc1.42E01E',
           'video/mp4',
         ];
   for (const c of candidates) {
     if ((window as any).MediaRecorder?.isTypeSupported?.(c)) return c;
   }
-  // ダメなら undefined（ブラウザ任せ）
-  return undefined;
+  return undefined; // ブラウザ任せ
 }
 
 async function encodeWithMediaRecorder(
   frames: AnyFrame[],
   fps: number,
-  mime: Mime,
+  target: Mime,
 ): Promise<Blob> {
   const firstDrawable = await toDrawable(frames[0] as any, { width: 720, height: 1280 });
   const { width, height } = detectSize(firstDrawable as any);
@@ -416,7 +415,7 @@ async function encodeWithMediaRecorder(
     ? (canvas as any).captureStream(fps)
     : (canvas as any).captureStream();
 
-  const prefer = pickMediaRecorderMime(mime);
+  const prefer = pickMediaRecorderMime(target);
   const options: MediaRecorderOptions = prefer
     ? { mimeType: prefer, videoBitsPerSecond: 4_000_000 }
     : { videoBitsPerSecond: 4_000_000 };
@@ -428,12 +427,21 @@ async function encodeWithMediaRecorder(
     recorder = new MediaRecorder(stream);
   }
 
-  const chunks: BlobPart[] = [];
+  const chunks: Blob[] = [];
   const done = new Promise<Blob>((resolve, reject) => {
-    recorder.ondataavailable = (ev) => ev.data && chunks.push(ev.data);
+    recorder.ondataavailable = (ev) => {
+      if (ev.data && ev.data.size > 0) chunks.push(ev.data);
+    };
     recorder.onerror = (ev) => reject((ev as any).error ?? new Error('MediaRecorder error'));
-    recorder.onstop = () => resolve(new Blob(chunks, { type: (options as any).mimeType ?? mime }));
-    recorder.onstart = () => { /* noop */ };
+    recorder.onstop = () => {
+      // ★ 実際に得られた最初のチャンクの type を採用（ここが重要）
+      const effectiveType =
+        (chunks[0] && chunks[0].type) ||
+        (recorder as any).mimeType ||
+        (options as any).mimeType ||
+        target;
+      resolve(new Blob(chunks, { type: effectiveType }));
+    };
   });
 
   // timeslice を与えて ondataavailable を確実化
@@ -456,7 +464,7 @@ async function encodeWithMediaRecorder(
   }
 
   // 最低尺を確保（極端に短いと再生できないビューアがある）
-  const minDurationMs = Math.max(500, (frames.length / fps) * 1000); // 0.5秒以上
+  const minDurationMs = Math.max(500, (frames.length / fps) * 1000);
   const elapsed = performance.now() - start;
   if (elapsed < minDurationMs) {
     await sleep(minDurationMs - elapsed);
@@ -466,8 +474,8 @@ async function encodeWithMediaRecorder(
   return done;
 }
 
-/* --- 録画直後の簡易再生検証（端末のデコーダ互換をチェック） --- */
-async function probePlayback(blob: Blob, mime: Mime, timeoutMs = 4000): Promise<boolean> {
+/* --- 録画直後の簡易再生検証（実際の blob.type で検証） --- */
+async function probePlayback(blob: Blob, timeoutMs = 4000): Promise<boolean> {
   try {
     const url = URL.createObjectURL(blob);
     const v = document.createElement('video');
@@ -483,7 +491,6 @@ async function probePlayback(blob: Blob, mime: Mime, timeoutMs = 4000): Promise<
         URL.revokeObjectURL(url);
       }
       v.onloadedmetadata = () => {
-        // duration が有限かつ > 0
         const good = isFinite(v.duration) && v.duration > 0 && v.readyState >= 1;
         cleanup(); resolve(good);
       };
@@ -500,7 +507,7 @@ async function probePlayback(blob: Blob, mime: Mime, timeoutMs = 4000): Promise<
 async function encodeWithFFmpeg(
   frames: AnyFrame[],
   fps: number,
-  mime: Mime,
+  target: Mime,
 ): Promise<Blob> {
   const createFFmpeg = await getCreateFFmpeg();
   if (!createFFmpeg) {
@@ -525,13 +532,13 @@ async function encodeWithFFmpeg(
     await ffmpeg.FS('writeFile', `frame_${String(i).padStart(5, '0')}.png`, png);
   }
 
-  const out = mime === 'video/webm' ? 'out.webm' : 'out.mp4';
+  const out = target === 'video/webm' ? 'out.webm' : 'out.mp4';
   const args =
-    mime === 'video/webm'
+    target === 'video/webm'
       ? [
           '-framerate', String(fps),
           '-i', 'frame_%05d.png',
-          '-c:v', 'libvpx-vp8',       // ★ VP8 固定
+          '-c:v', 'libvpx-vp8',       // VP8 固定（互換性高）
           '-b:v', '2M',
           '-pix_fmt', 'yuv420p',
           out,
@@ -558,6 +565,7 @@ async function encodeWithFFmpeg(
     ffmpeg.FS('unlink', out);
   } catch { /* noop */ }
 
+  const mime = target === 'video/webm' ? 'video/webm' : 'video/mp4';
   return new Blob([data.buffer], { type: mime });
 }
 
