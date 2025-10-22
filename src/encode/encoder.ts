@@ -60,79 +60,182 @@ function normalizeOptions(opts: EncodeInput): EncodeOptions {
 
 /* ---------------- フレーム正規化（drawImage可能に変換） ---------------- */
 
-type ImageDataLike = { data: Uint8ClampedArray; width: number; height: number };
+// RGBA配列を含む構造
+type ImageDataLike = { data: Uint8ClampedArray | Uint8Array; width: number; height: number };
+
+// 多様な入力に対応
 type AnyFrame =
   | CanvasImageSource
   | ImageData
   | ImageDataLike
+  | Uint8Array
+  | ArrayBuffer
   | Blob
-  | string; // ← ★ dataURL 等の文字列も許容
+  | string
+  | { pixels: Uint8Array | Uint8ClampedArray; width: number; height: number; channels?: number }
+  | { data: Uint8Array | Uint8ClampedArray; width: number; height: number; channels?: number }
+  | { url?: string; src?: string }
+  | { canvas?: any; bitmap?: any; image?: any; video?: any }; // ラッパー系
 
 function isCanvasImageSource(x: unknown): x is CanvasImageSource {
   const g: any = globalThis as any;
-  return (
+  // duck-typing: OffscreenCanvas/VideoFrame等、別Realmも拾う
+  return !!(
     (g.HTMLCanvasElement && x instanceof g.HTMLCanvasElement) ||
     (g.ImageBitmap && x instanceof g.ImageBitmap) ||
     (g.HTMLImageElement && x instanceof g.HTMLImageElement) ||
     (g.HTMLVideoElement && x instanceof g.HTMLVideoElement) ||
     (g.OffscreenCanvas && x instanceof g.OffscreenCanvas) ||
     (g.SVGImageElement && x instanceof g.SVGImageElement) ||
-    (g.VideoFrame && x instanceof g.VideoFrame)
+    (g.VideoFrame && x instanceof g.VideoFrame) ||
+    // 別Realm対策：主要プロパティで推定
+    ((x as any)?.getContext && (x as any)?.width && (x as any)?.height) || // Canvas系
+    ((x as any)?.close && (x as any)?.displayWidth && (x as any)?.displayHeight) // VideoFrameライク
   );
 }
 
 function isImageDataLike(x: any): x is ImageDataLike {
   return (
     x &&
-    x.data instanceof Uint8ClampedArray &&
+    (x.data instanceof Uint8ClampedArray || x.data instanceof Uint8Array) &&
     typeof x.width === 'number' &&
     typeof x.height === 'number'
   );
+}
+
+function ensureUint8Clamped(buf: Uint8Array | Uint8ClampedArray): Uint8ClampedArray {
+  return buf instanceof Uint8ClampedArray ? buf : new Uint8ClampedArray(buf.buffer, buf.byteOffset, buf.byteLength);
+}
+
+function expandToRgba(buf: Uint8ClampedArray, w: number, h: number, channels: number): Uint8ClampedArray {
+  // channels=1(グレースケール)や3(RGB)をRGBAへ拡張
+  if (channels === 4) return buf;
+  const out = new Uint8ClampedArray(w * h * 4);
+  if (channels === 1) {
+    for (let i = 0, j = 0; i < buf.length; i += 1, j += 4) {
+      const v = buf[i];
+      out[j] = v; out[j + 1] = v; out[j + 2] = v; out[j + 3] = 255;
+    }
+  } else if (channels === 3) {
+    for (let i = 0, j = 0; i < buf.length; i += 3, j += 4) {
+      out[j] = buf[i]; out[j + 1] = buf[i + 1]; out[j + 2] = buf[i + 2]; out[j + 3] = 255;
+    }
+  } else {
+    // 未知チャンネル数はα=255で切り上げ（長さが合わない場合は0埋め）
+    for (let i = 0, j = 0; j < out.length; i += channels, j += 4) {
+      out[j] = buf[i] ?? 0;
+      out[j + 1] = buf[i + 1] ?? 0;
+      out[j + 2] = buf[i + 2] ?? 0;
+      out[j + 3] = 255;
+    }
+  }
+  return out;
+}
+
+function loadImage(url: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.decoding = 'async';
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = url;
+  });
 }
 
 async function toDrawable(
   src: AnyFrame,
   fallbackSize?: { width: number; height: number },
 ): Promise<CanvasImageSource> {
-  // すでにCanvasImageSourceならそのまま
-  if (isCanvasImageSource(src)) return src;
+  // そのまま使える型
+  if (isCanvasImageSource(src)) return src as CanvasImageSource;
 
-  // ImageData or それに準ずるデータ → Canvasに描画して返す
+  // ラッパー解体
+  if ((src as any)?.canvas && isCanvasImageSource((src as any).canvas)) return (src as any).canvas;
+  if ((src as any)?.bitmap) {
+    const b = (src as any).bitmap;
+    if (isCanvasImageSource(b)) return b;
+    // OffscreenCanvas#transferToImageBitmapの戻りなど
+    if (b && typeof b === 'object' && 'close' in b) return b as CanvasImageSource;
+  }
+  if ((src as any)?.image && isCanvasImageSource((src as any).image)) return (src as any).image;
+  if ((src as any)?.video && isCanvasImageSource((src as any).video)) return (src as any).video;
+
+  // ImageData / ImageDataLike
   if (src instanceof ImageData || isImageDataLike(src)) {
     const w = (src as any).width ?? fallbackSize?.width ?? 720;
     const h = (src as any).height ?? fallbackSize?.height ?? 1280;
     const c = document.createElement('canvas');
-    c.width = w;
-    c.height = h;
+    c.width = w; c.height = h;
     const ctx = c.getContext('2d');
     if (!ctx) throw new Error('2D context unavailable');
-    const id = src instanceof ImageData ? src : new ImageData((src as any).data, w, h);
+    const data = src instanceof ImageData ? src.data : ensureUint8Clamped((src as any).data);
+    const channels = (src as any).channels ?? 4;
+    const rgba = channels === 4 ? data : expandToRgba(data, w, h, channels);
+    const id = new ImageData(rgba, w, h);
     ctx.putImageData(id, 0, 0);
     return c;
   }
 
-  // Blob → ImageBitmap
-  if (src instanceof Blob) {
-    const bmp = await createImageBitmap(src);
-    return bmp;
+  // Uint8Array / ArrayBuffer（RGBA想定）
+  if (src instanceof Uint8Array || src instanceof ArrayBuffer) {
+    const w = fallbackSize?.width ?? 720;
+    const h = fallbackSize?.height ?? 1280;
+    const bytes = src instanceof Uint8Array ? src : new Uint8Array(src);
+    const rgba = ensureUint8Clamped(bytes);
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const ctx = c.getContext('2d');
+    if (!ctx) throw new Error('2D context unavailable');
+    const id = new ImageData(rgba, w, h);
+    ctx.putImageData(id, 0, 0);
+    return c;
   }
 
-  // dataURL 文字列 → HTMLImageElement
-  if (typeof src === 'string') {
-    const s = src as string;
-    if (s.startsWith('data:image/')) {
-      const img = new Image();
-      img.decoding = 'async';
-      const p = new Promise<HTMLImageElement>((res, rej) => {
-        img.onload = () => res(img);
-        img.onerror = rej;
-      });
-      img.src = s;
-      return p;
+  // {pixels|data,width,height}
+  if (typeof src === 'object' && src) {
+    const maybe = src as any;
+    if ((maybe.pixels || maybe.data) && typeof maybe.width === 'number' && typeof maybe.height === 'number') {
+      const w = maybe.width, h = maybe.height;
+      const buf = ensureUint8Clamped(maybe.pixels ?? maybe.data);
+      const channels = maybe.channels ?? 4;
+      const rgba = channels === 4 ? buf : expandToRgba(buf, w, h, channels);
+      const c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      const ctx = c.getContext('2d');
+      if (!ctx) throw new Error('2D context unavailable');
+      const id = new ImageData(rgba, w, h);
+      ctx.putImageData(id, 0, 0);
+      return c;
+    }
+    // {url|src} 文字列を持つ場合（http/https/blob/data:image）
+    const rawUrl = (maybe.url ?? maybe.src) as string | undefined;
+    if (typeof rawUrl === 'string') {
+      const img = await loadImage(rawUrl);
+      return img;
     }
   }
 
-  // どうしても判定できない場合は、TypeErrorを投げて上位で別経路にフォールバック
+  // Blob
+  if (src instanceof Blob) {
+    try {
+      const bmp = await createImageBitmap(src);
+      return bmp;
+    } catch {
+      // 画像Blobでなければこの経路は不可
+    }
+  }
+
+  // 文字列（dataURL / http(s) / blob:）
+  if (typeof src === 'string') {
+    const s = src as string;
+    if (s.startsWith('data:image:') || s.startsWith('data:image/')) {
+      return await loadImage(s);
+    }
+    if (s.startsWith('blob:') || s.startsWith('http://') || s.startsWith('https://')) {
+      return await loadImage(s); // CORS注意だが同一オリジン/Blob想定
+    }
+  }
+
   throw new TypeError('toDrawable: unsupported frame type for drawImage');
 }
 
