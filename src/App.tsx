@@ -4,6 +4,7 @@ import { useStore, MAX_RETRIES } from "./core/store";
 import SegmentationDemo from "./ui/SegmentationDemo"; // 未使用でも将来用に残す
 import licensesMarkdown from "./docs/licenses.md?raw"; // ライセンス文面（Markdown）の生文字列を取り込む
 import { marked } from "marked"; // MarkdownをHTMLに変換
+import { saveBlob } from "./utils/saveBlob"; // 拡張子/MIME整合の保存ユーティリティ
 
 // URLハッシュからパラメータを取得（#key=value&...）
 function parseHashParams(): Record<string, string> {
@@ -88,8 +89,6 @@ const App: React.FC = () => {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
           facingMode: { ideal: "environment" },
-          width: { ideal: 1920 },
-          height: { ideal: 1080 },
         },
         audio: false,
       });
@@ -162,6 +161,9 @@ const App: React.FC = () => {
     };
   }, [videoObjectUrl]);
 
+  const blobSizeLabel =
+    generatedVideoBlob ? `${generatedVideoBlob.size.toLocaleString()} bytes` : null;
+
   return (
     <div style={{ maxWidth: 720, margin: "40px auto", fontFamily: "system-ui" }}>
       {(() => {
@@ -185,7 +187,7 @@ const App: React.FC = () => {
           )}
         </div>
 
-        {/* 選択された画像を表示するUIを追加 */}
+        {/* 選択された画像を表示 */}
         {inputImage && (
           <div style={{ marginTop: 16, marginBottom: 16 }}>
             <h3>選択された画像:</h3>
@@ -244,7 +246,7 @@ const App: React.FC = () => {
         {isProcessingUI ? "処理中..." : "選択"}
       </button>
 
-      {/* processing 中の補助表示（テストで期待） */}
+      {/* processing 中の補助表示 */}
       {isProcessingUI && (
         <div style={{ marginTop: 16 }}>
           <div aria-label="loading" data-testid="loading-cloud" style={{ display: "inline-block" }}>
@@ -268,12 +270,12 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* 成功時の UI（処理中ヒントが下りてから表示） */}
+      {/* 成功時の UI */}
       {!isProcessingUI && status === "success" && (
         <div style={{ marginTop: 16 }}>
           <h3>成功!</h3>
 
-          {/* ▼ ここで動画をインライン再生 */}
+          {/* ▼ 動画プレビュー */}
           {generatedVideoBlob && videoObjectUrl && (
             <div style={{ margin: "12px 0" }}>
               <video
@@ -288,35 +290,33 @@ const App: React.FC = () => {
                 />
                 ブラウザが動画の再生に対応していません。
               </video>
+
+              {/* 生成物の可視化（検証しやすくする） */}
               <div style={{ marginTop: 6, fontSize: 12, color: "#666" }}>
-                MIME:{" "}
+                size: <code>{blobSizeLabel}</code> / MIME:{" "}
                 <code>{generatedVideoMimeType || generatedVideoBlob.type || "(unknown)"}</code>
+              </div>
+
+              {/* フォールバック導線：iOS/Safari 等で download 属性が効かない場合 */}
+              <div style={{ marginTop: 6 }}>
+                <a
+                  href={videoObjectUrl}
+                  target="_blank"
+                  rel="noopener"
+                  style={{ fontSize: 12, color: "#007bff", textDecoration: "underline" }}
+                >
+                  再生/保存できない場合はこちら（新しいタブで開く）
+                </a>
               </div>
             </div>
           )}
 
-          {/* ダウンロードは別ボタンで残す */}
+          {/* ダウンロード：saveBlobでMIMEと拡張子を一致させる */}
           {generatedVideoBlob && (
             <button
               onClick={() => {
-                const url = URL.createObjectURL(generatedVideoBlob);
-                const a = document.createElement("a");
-                a.href = url;
-                // MIMEタイプに基づいてファイル拡張子を決定
-                let filename = "parallax_video";
-                const mt = generatedVideoMimeType || generatedVideoBlob.type;
-                if (mt === "video/mp4") {
-                  filename += ".mp4";
-                } else if (mt === "video/webm") {
-                  filename += ".webm";
-                } else {
-                  filename += ".bin"; // 不明な場合は汎用的な拡張子
-                }
-                a.download = filename;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                URL.revokeObjectURL(url);
+                // base名は "parallax_video" で固定。拡張子は saveBlob が blob.type から決定。
+                saveBlob(generatedVideoBlob, "parallax_video");
               }}
               style={{
                 padding: "10px 16px",
@@ -335,7 +335,7 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* エラー時の UI（処理中ヒントが下りてから表示） */}
+      {/* エラー時の UI */}
       {!isProcessingUI && status === "error" && (
         <div style={{ marginTop: 16 }}>
           <h3>エラー</h3>
@@ -468,8 +468,6 @@ const CameraModal: React.FC<{
           stream = await navigator.mediaDevices.getUserMedia({
             video: {
               facingMode: { ideal: "environment" },
-              width: { ideal: 1920 },
-              height: { ideal: 1080 },
             },
             audio: false,
           });
