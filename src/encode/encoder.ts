@@ -1,158 +1,236 @@
-// src/encode/encoder.ts
-import cv from "@techstark/opencv-js";
-import { encodeWithWebCodecs } from "./webcodecs";
-import { encodeWithMediaRecorder } from "./mediarec";
-import { encodeWithFFmpeg } from "./ffmpeg";
+/* eslint-disable no-console */
+import { createFFmpeg } from '@ffmpeg/ffmpeg';
 
-/* ===================== ユーティリティ ===================== */
+type Mime = 'video/webm' | 'video/mp4';
 
-/** ブラウザの実再生能力を調べる（true ならその MIME を再生できる見込み） */
-function canPlay(mimeBase: "video/mp4" | "video/webm"): boolean {
-  if (typeof document === "undefined") return false;
-  const v = document.createElement("video");
-  const candidates =
-    mimeBase === "video/mp4"
+export interface EncodeOptions {
+  fps: number;
+  preferredMime?: Mime; // 明示指定があれば優先
+}
+
+/* ---------------- 判定ユーティリティ ---------------- */
+
+// iOS厳密判定：Android誤検出を避ける
+function isIOS(): boolean {
+  const ua = navigator.userAgent;
+  const platform = (navigator as any).platform || '';
+  const iOSFamily = /\b(iPad|iPhone|iPod)\b/.test(ua) && !/Android/i.test(ua);
+  const touchOnMac = /Macintosh/.test(ua) && 'ontouchend' in document;
+  const applePlatform = /iPad|iPhone|iPod/.test(platform);
+  return iOSFamily || touchOnMac || applePlatform;
+}
+
+// captureStream の存在チェック（Android WebView など未実装対策）
+function canCaptureStream(): boolean {
+  const htmlCanvasProto = (HTMLCanvasElement as any)?.prototype;
+  const offscreenProto = (globalThis as any).OffscreenCanvas?.prototype;
+  return (
+    typeof htmlCanvasProto?.captureStream === 'function' ||
+    typeof offscreenProto?.captureStream === 'function'
+  );
+}
+
+export function getPreferredMimeType(): Mime {
+  // iOSはMP4、それ以外（Android含む）はWebM優先
+  return isIOS() ? 'video/mp4' : 'video/webm';
+}
+
+function alternativeOf(mime: Mime): Mime {
+  return mime === 'video/webm' ? 'video/mp4' : 'video/webm';
+}
+
+function extOf(mime: Mime): 'webm' | 'mp4' {
+  return mime === 'video/webm' ? 'webm' : 'mp4';
+}
+
+/* ---------------- パブリックAPI ---------------- */
+
+// frames: drawImage可能なソース(Canvas/ImageBitmap/HTMLVideoElement等)
+export async function encodeVideo(
+  frames: CanvasImageSource[],
+  { fps, preferredMime }: EncodeOptions,
+): Promise<{ blob: Blob; filename: string; mime: Mime }> {
+  if (!frames?.length) {
+    throw new Error('encodeVideo: frames is empty');
+  }
+
+  const primary: Mime = (preferredMime ?? getPreferredMimeType());
+  const secondary: Mime = alternativeOf(primary);
+
+  // 1) MediaRecorder（captureStream必須）
+  if (typeof (globalThis as any).MediaRecorder === 'function' && canCaptureStream()) {
+    try {
+      const blob = await encodeWithMediaRecorder(frames, fps, primary);
+      console.log(`Encoded with MediaRecorder as ${primary}`);
+      return { blob, filename: `output.${extOf(primary)}`, mime: primary };
+    } catch (e1) {
+      console.warn(`MediaRecorder failed with ${primary}`, e1);
+      try {
+        const blob = await encodeWithMediaRecorder(frames, fps, secondary);
+        console.log(`Encoded with MediaRecorder as ${secondary}`);
+        return { blob, filename: `output.${extOf(secondary)}`, mime: secondary };
+      } catch (e2) {
+        console.warn(`MediaRecorder also failed with ${secondary}`, e2);
+        // → ffmpeg.wasm へ
+      }
+    }
+  } else {
+    console.log('MediaRecorder skipped: captureStream() not supported or MediaRecorder missing.');
+  }
+
+  // 2) ffmpeg.wasm（まずprimary、失敗時secondary）
+  try {
+    const blob = await encodeWithFFmpeg(frames, fps, primary);
+    console.log(`Encoded with ffmpeg.wasm as ${primary}`);
+    return { blob, filename: `output.${extOf(primary)}`, mime: primary };
+  } catch (e3) {
+    console.warn(`ffmpeg.wasm failed with ${primary}`, e3);
+    const blob = await encodeWithFFmpeg(frames, fps, secondary);
+    console.log(`Encoded with ffmpeg.wasm as ${secondary}`);
+    return { blob, filename: `output.${extOf(secondary)}`, mime: secondary };
+  }
+}
+
+/* ---------------- MediaRecorder 実装 ---------------- */
+
+async function encodeWithMediaRecorder(
+  frames: CanvasImageSource[],
+  fps: number,
+  mime: Mime,
+): Promise<Blob> {
+  const { width, height } = detectSize(frames[0]);
+
+  // オンメモリCanvas（OffscreenはcaptureStream未対応環境が多いので通常Canvas）
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('2D context unavailable');
+
+  // captureStream は存在チェック済み
+  const stream: MediaStream = (canvas as any).captureStream
+    ? (canvas as any).captureStream(fps)
+    : (canvas as any).captureStream();
+
+  // 端末ごとに厳しすぎると失敗するので4Mbps程度
+  const options: MediaRecorderOptions = { mimeType: mime, videoBitsPerSecond: 4_000_000 };
+  let recorder: MediaRecorder;
+  try {
+    recorder = new MediaRecorder(stream, options);
+  } catch {
+    // mimeTypeが受け付けられない場合は指定なしで再トライ
+    recorder = new MediaRecorder(stream);
+  }
+
+  const chunks: BlobPart[] = [];
+  const done = new Promise<Blob>((resolve, reject) => {
+    recorder.ondataavailable = (ev) => ev.data && chunks.push(ev.data);
+    recorder.onerror = (ev) => reject((ev as any).error ?? new Error('MediaRecorder error'));
+    recorder.onstop = () => resolve(new Blob(chunks, { type: mime }));
+  });
+
+  recorder.start();
+
+  const frameInterval = Math.max(1, Math.round(1000 / fps));
+  for (let i = 0; i < frames.length; i++) {
+    ctx.clearRect(0, 0, width, height);
+    ctx.drawImage(frames[i], 0, 0, width, height);
+    // MediaRecorderはリアルタイム進行が期待値。setTimeoutで最低限間隔を担保
+    // eslint-disable-next-line no-await-in-loop
+    await sleep(frameInterval);
+  }
+
+  recorder.stop();
+  return done;
+}
+
+/* ---------------- ffmpeg.wasm 実装 ---------------- */
+
+async function encodeWithFFmpeg(
+  frames: CanvasImageSource[],
+  fps: number,
+  mime: Mime,
+): Promise<Blob> {
+  const { width, height } = detectSize(frames[0]);
+
+  // 連番PNGを仮想FSへ書き出し
+  const ffmpeg = createFFmpeg({
+    log: false,
+    // プロジェクトの配置に合わせて調整（public/ffmpeg/… に置く想定）
+    corePath: '/ffmpeg/ffmpeg-core.js',
+  });
+  if (!ffmpeg.isLoaded()) {
+    await ffmpeg.load();
+  }
+
+  for (let i = 0; i < frames.length; i++) {
+    const png = canvasSourceToPng(frames[i], width, height);
+    await ffmpeg.FS('writeFile', `frame_${String(i).padStart(5, '0')}.png`, png);
+  }
+
+  const out = mime === 'video/webm' ? 'out.webm' : 'out.mp4';
+  const args =
+    mime === 'video/webm'
       ? [
-          'video/mp4; codecs="avc1.42E01E,mp4a.40.2"',
-          'video/mp4; codecs="avc1.4d401e"',
-          "video/mp4",
+          '-framerate', String(fps),
+          '-i', 'frame_%05d.png',
+          '-c:v', 'libvpx-vp9',
+          '-b:v', '2M',
+          '-pix_fmt', 'yuv420p',
+          out,
         ]
       : [
-          'video/webm; codecs="vp9,opus"',
-          'video/webm; codecs="vp8,opus"',
-          "video/webm",
+          '-framerate', String(fps),
+          '-i', 'frame_%05d.png',
+          '-c:v', 'libx264',
+          '-b:v', '2M',
+          '-pix_fmt', 'yuv420p',
+          '-movflags', '+faststart',
+          out,
         ];
-  return candidates.some((mt) => v.canPlayType(mt) !== "");
-}
 
-/** captureStream が使えるか（Android WebView 等は false） */
-function hasCanvasCaptureStream(): boolean {
-  if (typeof HTMLCanvasElement === "undefined") return false;
-  return typeof (HTMLCanvasElement.prototype as any).captureStream === "function";
-}
+  await ffmpeg.run(...args);
+  const data = ffmpeg.FS('readFile', out);
 
-/**
- * 優先 MIME を決める。
- * - localStorage 'FORCE_MIME': 'mp4' | 'webm' で強制
- * - それ以外は canPlayType による実機判定で mp4 優先 → webm
- * - 両方空でもとりあえず webm
- */
-export function getPreferredMimeType(): "video/webm" | "video/mp4" {
-  if (typeof window !== "undefined") {
-    const forced = localStorage.getItem("FORCE_MIME");
-    if (forced === "mp4") return "video/mp4";
-    if (forced === "webm") return "video/webm";
-  }
-  const mp4OK = canPlay("video/mp4");
-  const webmOK = canPlay("video/webm");
-  if (mp4OK) return "video/mp4";
-  if (webmOK) return "video/webm";
-  return "video/webm";
-}
-
-/** Blob.type が空や不正のときだけ MIME を補正する（既存 type は尊重） */
-function ensureBlobType(blob: Blob, mime: string): Blob {
-  if (blob.type) return blob;
-  return new Blob([blob], { type: mime });
-}
-
-/** WebCodecs は現状 WebM 系のみ利用（MP4 コンテナは不可、muxer 未導入のため最終手段寄り） */
-function canUseWebCodecsFor(mime: string): boolean {
-  if (typeof window === "undefined") return false;
-  if (typeof (window as any).VideoEncoder !== "function") return false;
-  return mime === "video/webm";
-}
-
-/** MediaRecorder が使えるか（isTypeSupported と captureStream を考慮） */
-function canUseMediaRecorderFor(mime: string): boolean {
-  if (typeof window === "undefined") return false;
-  if (typeof (window as any).MediaRecorder !== "function") return false;
-  // Canvas.captureStream が無いと描画フレーム列を録れない
-  if (!hasCanvasCaptureStream()) return false;
-  const MR: any = (window as any).MediaRecorder;
-  return typeof MR.isTypeSupported === "function" ? !!MR.isTypeSupported(mime) : true;
-}
-
-/* ===================== 本体：動画エンコード ===================== */
-
-export async function encodeVideo(frames: cv.Mat[], fps: number): Promise<Blob> {
-  const preferred = getPreferredMimeType();
-  const alternative = preferred === "video/webm" ? "video/mp4" : "video/webm";
-
-  // 実機の「再生しやすさ」を優先して MIME の試行順を作る
-  let playOrder: Array<"video/mp4" | "video/webm"> = [];
-  const prefOK = canPlay(preferred as any);
-  const altOK = canPlay(alternative as any);
-  if (prefOK) playOrder.push(preferred);
-  if (altOK) playOrder.push(alternative);
-  if (!playOrder.length) playOrder = [preferred, alternative];
-
-  const captureOK = hasCanvasCaptureStream();
-
-  // 追加ルール（重要）:
-  // - captureStream 不可（= MediaRecorder 経路が絶対使えない）端末では、
-  //   ffmpeg 経路の最初の試行を **必ず WebM から** に固定する。
-  //   → Android Chrome/WebView 互換を最大化（mp4 は端末依存で再生不可になりやすい）
-  if (!captureOK) {
-    // playOrder の先頭を webm に差し替える（canPlayType が空でも強制で試す）
-    const unique = new Set<"video/mp4" | "video/webm">(["video/webm", ...playOrder, "video/mp4"]);
-    playOrder = Array.from(unique); // 先頭: webm, 次: 既存順, 末尾: mp4
-  }
-
-  // 優先順：
-  // ① MediaRecorder（captureOK のときだけ）→
-  // ② WebCodecs（webm のみ、muxer無しのため最小限）→
-  // ③ ffmpeg.wasm（!captureOK の場合は webm→mp4 固定順で到達）
-  for (const mt of playOrder) {
-    // 1) MediaRecorder
-    if (captureOK && canUseMediaRecorderFor(mt)) {
-      try {
-        const blob = await encodeWithMediaRecorder(frames, fps, mt);
-        const out = ensureBlobType(blob, mt);
-        console.log(`Encoded with MediaRecorder as ${out.type || mt}`);
-        return out;
-      } catch (e) {
-        console.warn(`MediaRecorder failed with ${mt}.`, e);
-      }
+  // 後片付け（失敗しても無視）
+  try {
+    for (let i = 0; i < frames.length; i++) {
+      ffmpeg.FS('unlink', `frame_${String(i).padStart(5, '0')}.png`);
     }
+    ffmpeg.FS('unlink', out);
+  } catch { /* noop */ }
 
-    // 2) WebCodecs（WebM のみ。muxer 無しのため本当に最後の保険に近い）
-    if (mt === "video/webm" && canUseWebCodecsFor("video/webm")) {
-      try {
-        const blob = await encodeWithWebCodecs(frames, fps, "video/webm");
-        const out = ensureBlobType(blob, "video/webm");
-        console.log(`Encoded with WebCodecs as ${out.type || "video/webm"}`);
-        return out;
-      } catch (e) {
-        console.warn(`WebCodecs failed with video/webm.`, e);
-      }
-    }
+  return new Blob([data.buffer], { type: mime });
+}
 
-    // 3) ffmpeg.wasm
-    try {
-      const blob = await encodeWithFFmpeg(frames, fps, mt);
-      const out = ensureBlobType(blob, mt);
-      console.log(`Encoded with ffmpeg.wasm as ${out.type || mt}`);
-      return out;
-    } catch (e) {
-      console.warn(`ffmpeg.wasm failed with ${mt}.`, e);
-    }
-  }
+/* ---------------- 画像→PNG バイト列 ---------------- */
 
-  // 念のための再試行（稀に isTypeSupported と実挙動が食い違う端末対策）
-  if (captureOK) {
-    const rev = [...playOrder].reverse();
-    for (const mt of rev) {
-      if (canUseMediaRecorderFor(mt)) {
-        try {
-          const blob = await encodeWithMediaRecorder(frames, fps, mt);
-          const out = ensureBlobType(blob, mt);
-          console.log(`(Retry) Encoded with MediaRecorder as ${out.type || mt}`);
-          return out;
-        } catch {}
-      }
-    }
-  }
+function canvasSourceToPng(
+  src: CanvasImageSource,
+  width: number,
+  height: number,
+): Uint8Array {
+  const c = document.createElement('canvas');
+  c.width = width;
+  c.height = height;
+  const ctx = c.getContext('2d');
+  if (!ctx) throw new Error('2D context unavailable');
+  ctx.drawImage(src, 0, 0, width, height);
+  const dataUrl = c.toDataURL('image/png');
+  const bin = atob(dataUrl.split(',')[1]);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
 
-  throw new Error("All video encoders failed.");
+function detectSize(src: CanvasImageSource): { width: number; height: number } {
+  const any = src as any;
+  return {
+    width: any.videoWidth ?? any.naturalWidth ?? any.width ?? 720,
+    height: any.videoHeight ?? any.naturalHeight ?? any.height ?? 1280,
+  };
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
 }
