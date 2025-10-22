@@ -56,7 +56,7 @@ function ensureBlobType(blob: Blob, mime: string): Blob {
   return new Blob([blob], { type: mime });
 }
 
-/** WebCodecs は現状 WebM 系のみ利用（MP4 コンテナは不可） */
+/** WebCodecs は現状 WebM 系のみ利用（MP4 コンテナは不可、muxer 未導入のため最終手段寄り） */
 function canUseWebCodecsFor(mime: string): boolean {
   if (typeof window === "undefined") return false;
   if (typeof (window as any).VideoEncoder !== "function") return false;
@@ -80,30 +80,32 @@ export async function encodeVideo(frames: cv.Mat[], fps: number): Promise<Blob> 
   const alternative = preferred === "video/webm" ? "video/mp4" : "video/webm";
 
   // 実機の「再生しやすさ」を優先して MIME の試行順を作る
-  const playOrder: Array<"video/mp4" | "video/webm"> = [];
+  let playOrder: Array<"video/mp4" | "video/webm"> = [];
   const prefOK = canPlay(preferred as any);
   const altOK = canPlay(alternative as any);
   if (prefOK) playOrder.push(preferred);
   if (altOK) playOrder.push(alternative);
-  if (!playOrder.length) playOrder.push(preferred, alternative);
+  if (!playOrder.length) playOrder = [preferred, alternative];
 
-  // 追加ルール:
-  // - MediaRecorder 不可（= captureStream 不可）の環境では、ffmpeg 経路の最初の試行を
-  //   「webm を先に」へ入れ替える（Android WebView 対策）
   const captureOK = hasCanvasCaptureStream();
+
+  // 追加ルール（重要）:
+  // - captureStream 不可（= MediaRecorder 経路が絶対使えない）端末では、
+  //   ffmpeg 経路の最初の試行を **必ず WebM から** に固定する。
+  //   → Android Chrome/WebView 互換を最大化（mp4 は端末依存で再生不可になりやすい）
   if (!captureOK) {
-    // webm が play 可能なら webm を先頭に
-    const webmIdx = playOrder.indexOf("video/webm");
-    if (webmIdx > 0) {
-      playOrder.splice(webmIdx, 1);
-      playOrder.unshift("video/webm");
-    }
+    // playOrder の先頭を webm に差し替える（canPlayType が空でも強制で試す）
+    const unique = new Set<"video/mp4" | "video/webm">(["video/webm", ...playOrder, "video/mp4"]);
+    playOrder = Array.from(unique); // 先頭: webm, 次: 既存順, 末尾: mp4
   }
 
-  // 優先順：①MediaRecorder（コンテナ確実）→ ②WebCodecs(WebM) → ③ffmpeg.wasm
+  // 優先順：
+  // ① MediaRecorder（captureOK のときだけ）→
+  // ② WebCodecs（webm のみ、muxer無しのため最小限）→
+  // ③ ffmpeg.wasm（!captureOK の場合は webm→mp4 固定順で到達）
   for (const mt of playOrder) {
     // 1) MediaRecorder
-    if (canUseMediaRecorderFor(mt)) {
+    if (captureOK && canUseMediaRecorderFor(mt)) {
       try {
         const blob = await encodeWithMediaRecorder(frames, fps, mt);
         const out = ensureBlobType(blob, mt);
@@ -114,7 +116,7 @@ export async function encodeVideo(frames: cv.Mat[], fps: number): Promise<Blob> 
       }
     }
 
-    // 2) WebCodecs（WebM のみ、muxer無し環境では再生互換が低いので MediaRecorder不可時の補助）
+    // 2) WebCodecs（WebM のみ。muxer 無しのため本当に最後の保険に近い）
     if (mt === "video/webm" && canUseWebCodecsFor("video/webm")) {
       try {
         const blob = await encodeWithWebCodecs(frames, fps, "video/webm");
@@ -126,7 +128,7 @@ export async function encodeVideo(frames: cv.Mat[], fps: number): Promise<Blob> 
       }
     }
 
-    // 3) ffmpeg.wasm（MediaRecorder不可の端末では webm 優先で実行されるよう順序調整済み）
+    // 3) ffmpeg.wasm
     try {
       const blob = await encodeWithFFmpeg(frames, fps, mt);
       const out = ensureBlobType(blob, mt);
@@ -138,15 +140,17 @@ export async function encodeVideo(frames: cv.Mat[], fps: number): Promise<Blob> 
   }
 
   // 念のための再試行（稀に isTypeSupported と実挙動が食い違う端末対策）
-  const rev = [...playOrder].reverse();
-  for (const mt of rev) {
-    if (canUseMediaRecorderFor(mt)) {
-      try {
-        const blob = await encodeWithMediaRecorder(frames, fps, mt);
-        const out = ensureBlobType(blob, mt);
-        console.log(`(Retry) Encoded with MediaRecorder as ${out.type || mt}`);
-        return out;
-      } catch {}
+  if (captureOK) {
+    const rev = [...playOrder].reverse();
+    for (const mt of rev) {
+      if (canUseMediaRecorderFor(mt)) {
+        try {
+          const blob = await encodeWithMediaRecorder(frames, fps, mt);
+          const out = ensureBlobType(blob, mt);
+          console.log(`(Retry) Encoded with MediaRecorder as ${out.type || mt}`);
+          return out;
+        } catch {}
+      }
     }
   }
 
