@@ -129,3 +129,4 @@ dist
 # Mac files
 .DS_Store
 .gemini/
+.DS_Store
