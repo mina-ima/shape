@@ -16,10 +16,8 @@ type Mime = 'video/webm' | 'video/mp4';
 
 export interface EncodeOptions {
   fps: number;
-  preferredMime?: Mime; // 明示指定があれば優先
+  preferredMime?: Mime;
 }
-
-// 旧API互換：fps:number でも EncodeOptions でも受け付ける
 type EncodeInput = number | EncodeOptions;
 
 /* ---------------- 判定ユーティリティ ---------------- */
@@ -45,34 +43,23 @@ function canCaptureStream(): boolean {
 export function getPreferredMimeType(): Mime {
   return isIOS() ? 'video/mp4' : 'video/webm';
 }
-
-function extFromMime(mimeType: string): 'webm' | 'mp4' {
-  return mimeType.startsWith('video/mp4') ? 'mp4' : 'webm';
-}
-
 function altPreferred(mime: Mime): Mime {
   return mime === 'video/webm' ? 'video/mp4' : 'video/webm';
 }
-
 function normalizeOptions(opts: EncodeInput): EncodeOptions {
   return typeof opts === 'number' ? { fps: opts } : opts;
 }
 
-/* ---------------- フレーム型サポート ---------------- */
+/* ---------------- フレーム型サポート（drawImage可能に正規化） ---------------- */
 
 type ImageDataLike = { data: Uint8ClampedArray | Uint8Array; width: number; height: number };
 type AnyFrame =
   | CanvasImageSource
   | ImageData
   | ImageDataLike
-  | Uint8Array
-  | Uint16Array
-  | Float32Array
-  | ArrayBuffer
-  | number[]
-  | Blob
-  | string
-  | Promise<any>
+  | Uint8Array | Uint8ClampedArray | Uint16Array | Float32Array
+  | ArrayBuffer | number[]
+  | Blob | string | Promise<any>
   | { pixels?: any; data?: any; width?: number; height?: number; channels?: number; url?: string; src?: string; type?: string; format?: string; base64?: string }
   | { canvas?: any; bitmap?: any | Promise<any>; image?: any; video?: any };
 
@@ -90,7 +77,6 @@ function isCanvasImageSource(x: unknown): x is CanvasImageSource {
     ((x as any)?.close && (x as any)?.displayWidth && (x as any)?.displayHeight)
   );
 }
-
 function isImageDataLike(x: any): x is ImageDataLike {
   return (
     x &&
@@ -99,7 +85,6 @@ function isImageDataLike(x: any): x is ImageDataLike {
     typeof x.height === 'number'
   );
 }
-
 function ensureUint8Clamped(buf: ArrayLike<number>): Uint8ClampedArray {
   if (buf instanceof Uint8ClampedArray) return buf;
   if (buf instanceof Uint8Array) return new Uint8ClampedArray(buf.buffer, buf.byteOffset, buf.byteLength);
@@ -113,14 +98,12 @@ function ensureUint8Clamped(buf: ArrayLike<number>): Uint8ClampedArray {
   }
   return out;
 }
-
 function makeImageData(data: Uint8ClampedArray, w: number, h: number): ImageData {
   const expectedLen = w * h * 4;
   const copy = new Uint8ClampedArray(expectedLen);
   copy.set(data.subarray(0, Math.min(expectedLen, data.length)));
   return new ImageData(copy, w, h);
 }
-
 function expandToRgba(buf: Uint8ClampedArray, w: number, h: number, channels: number): Uint8ClampedArray {
   if (channels === 4) return buf;
   const out = new Uint8ClampedArray(w * h * 4);
@@ -143,7 +126,6 @@ function expandToRgba(buf: Uint8ClampedArray, w: number, h: number, channels: nu
   }
   return out;
 }
-
 function loadImage(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -153,65 +135,48 @@ function loadImage(url: string): Promise<HTMLImageElement> {
     img.src = url;
   });
 }
-
 function base64ToBlob(b64: string, mime = 'image/png'): Blob {
   const bin = atob(b64);
   const u8 = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
   return new Blob([u8], { type: mime });
 }
-
-/* 文字列（data:, http(s), blob:, Base64）→描画可能へ */
 async function stringToDrawable(s: string): Promise<CanvasImageSource> {
   if (s.startsWith('data:')) {
-    try {
-      const img = await loadImage(s);
-      return img;
-    } catch {
+    try { return await loadImage(s); } catch {
       const m = s.match(/^data:(.*?);base64,(.*)$/);
       if (m) {
         const mime = m[1] || 'image/png';
         const blob = base64ToBlob(m[2], mime);
-        const bmp = await createImageBitmap(blob);
-        return bmp;
+        return await createImageBitmap(blob);
       }
     }
   }
   if (s.startsWith('blob:') || s.startsWith('http://') || s.startsWith('https://')) {
     return await loadImage(s);
   }
-  // プレーンBase64推定
   if (/^[A-Za-z0-9+/=]+$/.test(s) && s.length > 100) {
     const blob = base64ToBlob(s, 'image/png');
-    const bmp = await createImageBitmap(blob);
-    return bmp;
+    return await createImageBitmap(blob);
   }
   throw new TypeError('stringToDrawable: unsupported string format');
 }
 
-async function toDrawable(
-  src: AnyFrame,
-  fallbackSize?: { width: number; height: number },
-): Promise<CanvasImageSource> {
+async function toDrawable(src: AnyFrame, fallbackSize?: { width: number; height: number }): Promise<CanvasImageSource> {
   if (src && typeof (src as Promise<any>).then === 'function') {
     const resolved = await (src as Promise<any>);
     return toDrawable(resolved, fallbackSize);
   }
-
   if (isCanvasImageSource(src)) return src as CanvasImageSource;
-
   if ((src as any)?.canvas && isCanvasImageSource((src as any).canvas)) return (src as any).canvas;
-
   if ((src as any)?.bitmap) {
     let b = (src as any).bitmap;
     if (b && typeof (b as Promise<any>)?.then === 'function') b = await b;
     if (isCanvasImageSource(b)) return b;
     if (b && typeof b === 'object' && 'close' in b) return b as CanvasImageSource;
   }
-
   if ((src as any)?.image && isCanvasImageSource((src as any).image)) return (src as any).image;
   if ((src as any)?.video && isCanvasImageSource((src as any).video)) return (src as any).video;
-
   if (
     src &&
     typeof src === 'object' &&
@@ -221,7 +186,6 @@ async function toDrawable(
   ) {
     return src as any;
   }
-
   if (src instanceof ImageData || isImageDataLike(src)) {
     const w = (src as any).width ?? fallbackSize?.width ?? 720;
     const h = (src as any).height ?? fallbackSize?.height ?? 1280;
@@ -229,17 +193,13 @@ async function toDrawable(
     c.width = w; c.height = h;
     const ctx = c.getContext('2d');
     if (!ctx) throw new Error('2D context unavailable');
-    const data =
-      src instanceof ImageData
-        ? src.data
-        : ensureUint8Clamped((src as any).data as Uint8ClampedArray | Uint8Array);
+    const data = src instanceof ImageData ? src.data : ensureUint8Clamped((src as any).data);
     const channels = (src as any).channels ?? 4;
     const rgba = channels === 4 ? data : expandToRgba(ensureUint8Clamped(data), w, h, channels);
     const id = makeImageData(ensureUint8Clamped(rgba), w, h);
     ctx.putImageData(id, 0, 0);
     return c;
   }
-
   if (src instanceof Uint8Array || src instanceof Uint8ClampedArray || src instanceof Uint16Array || src instanceof Float32Array || src instanceof ArrayBuffer || Array.isArray(src)) {
     const w = fallbackSize?.width ?? 720;
     const h = fallbackSize?.height ?? 1280;
@@ -258,20 +218,16 @@ async function toDrawable(
     ctx.putImageData(id, 0, 0);
     return c;
   }
-
   if (typeof src === 'object' && src) {
     const maybe = src as any;
-
     if (typeof maybe.base64 === 'string' || typeof maybe.data === 'string') {
       const b64 = (maybe.base64 ?? maybe.data) as string;
       const mime = (maybe.format ?? maybe.type ?? 'image/png') as string;
       try {
         const blob = base64ToBlob(b64.replace(/^data:.*;base64,/, ''), mime);
-        const bmp = await createImageBitmap(blob);
-        return bmp;
-      } catch { /* fallthrough */ }
+        return await createImageBitmap(blob);
+      } catch {}
     }
-
     if ((maybe.pixels || maybe.data) && typeof maybe.width === 'number' && typeof maybe.height === 'number') {
       const w = maybe.width, h = maybe.height;
       const raw = maybe.pixels ?? maybe.data;
@@ -292,24 +248,17 @@ async function toDrawable(
       ctx.putImageData(id, 0, 0);
       return c;
     }
-
     const rawUrl = (maybe.url ?? maybe.src) as string | undefined;
     if (typeof rawUrl === 'string') {
-      const img = await loadImage(rawUrl);
-      return img;
+      return await loadImage(rawUrl);
     }
   }
-
   if (src instanceof Blob) {
-    const bmp = await createImageBitmap(src);
-    return bmp;
+    return await createImageBitmap(src);
   }
-
   if (typeof src === 'string') {
     return await stringToDrawable(src);
   }
-
-  // 最後の逃げ道：空フレーム
   if (fallbackSize) {
     const c = document.createElement('canvas');
     c.width = fallbackSize.width; c.height = fallbackSize.height;
@@ -318,7 +267,6 @@ async function toDrawable(
     ctx.clearRect(0, 0, c.width, c.height);
     return c;
   }
-
   throw new TypeError('toDrawable: unsupported frame type for drawImage');
 }
 
@@ -338,63 +286,57 @@ export async function encodeVideoWithMeta(
   const primary: Mime = preferredMime ?? getPreferredMimeType();
   const secondary: Mime = altPreferred(primary);
 
-  // 1) MediaRecorder（captureStream必須）— 実出力の type を採用して検証
+  // 1) MediaRecorder 優先（実出力の blob.type を採用）
   if (typeof (globalThis as any).MediaRecorder === 'function' && canCaptureStream()) {
     try {
       const blob1 = await encodeWithMediaRecorder(frames, fps, primary);
       const ok1 = await probePlayback(blob1);
       if (ok1) {
-        const ext = extFromMime(blob1.type || primary);
-        return { blob: blob1, filename: `output.${ext}`, mime: (ext === 'mp4' ? 'video/mp4' : 'video/webm') };
+        const mime1 = (blob1.type || primary) as Mime;
+        const filename1 = mime1 === 'video/mp4' ? 'output.mp4' : 'output.webm';
+        return { blob: blob1, filename: filename1, mime: mime1 };
       }
       console.warn('Playback probe failed. Retrying with alternate MediaRecorder settings…');
       const blob2 = await encodeWithMediaRecorder(frames, fps, secondary);
       const ok2 = await probePlayback(blob2);
       if (ok2) {
-        const ext = extFromMime(blob2.type || secondary);
-        return { blob: blob2, filename: `output.${ext}`, mime: (ext === 'mp4' ? 'video/mp4' : 'video/webm') };
+        const mime2 = (blob2.type || secondary) as Mime;
+        const filename2 = mime2 === 'video/mp4' ? 'output.mp4' : 'output.webm';
+        return { blob: blob2, filename: filename2, mime: mime2 };
       }
-      // → ffmpeg.wasm へ
     } catch (e1) {
       console.warn('MediaRecorder path failed', e1);
-      // → ffmpeg.wasm
     }
   } else {
     console.log('MediaRecorder skipped: captureStream() not supported or MediaRecorder missing.');
   }
 
-  // 2) ffmpeg.wasm（依存があれば）
+  // 2) ffmpeg.wasm（存在すれば）
   try {
     const blob = await encodeWithFFmpeg(frames, fps, primary);
-    const ext = extFromMime(blob.type || primary);
-    return { blob, filename: `output.${ext}`, mime: (ext === 'mp4' ? 'video/mp4' : 'video/webm') };
+    const mime = (blob.type || primary) as Mime;
+    const filename = mime === 'video/mp4' ? 'output.mp4' : 'output.webm';
+    return { blob, filename, mime };
   } catch (e3) {
     console.warn(`ffmpeg.wasm failed with ${primary}`, e3);
     const blob = await encodeWithFFmpeg(frames, fps, secondary);
-    const ext = extFromMime(blob.type || secondary);
-    return { blob, filename: `output.${ext}`, mime: (ext === 'mp4' ? 'video/mp4' : 'video/webm') };
+    const mime = (blob.type || secondary) as Mime;
+    const filename = mime === 'video/mp4' ? 'output.mp4' : 'output.webm';
+    return { blob, filename, mime };
   }
 }
 
-/* ---------------- MediaRecorder 実装（VP8優先＋実 type を採用） ---------------- */
+/* ---------------- MediaRecorder 実装 ---------------- */
 
 function pickMediaRecorderMime(target: Mime): string | undefined {
   const candidates =
     target === 'video/webm'
-      ? [
-          'video/webm;codecs=vp8', // 互換性が高い
-          'video/webm;codecs=vp9',
-          'video/webm',
-        ]
-      : [
-          // Android Chrome は MediaRecorder の MP4 未対応が多い（isTypeSupported で弾かれることがある）
-          'video/mp4;codecs=avc1.42E01E',
-          'video/mp4',
-        ];
+      ? ['video/webm;codecs=vp8', 'video/webm;codecs=vp9', 'video/webm']
+      : ['video/mp4;codecs=avc1.42E01E', 'video/mp4'];
   for (const c of candidates) {
     if ((window as any).MediaRecorder?.isTypeSupported?.(c)) return c;
   }
-  return undefined; // ブラウザ任せ
+  return undefined;
 }
 
 async function encodeWithMediaRecorder(
@@ -406,8 +348,7 @@ async function encodeWithMediaRecorder(
   const { width, height } = detectSize(firstDrawable as any);
 
   const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
+  canvas.width = width; canvas.height = height;
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('2D context unavailable');
 
@@ -421,20 +362,14 @@ async function encodeWithMediaRecorder(
     : { videoBitsPerSecond: 4_000_000 };
 
   let recorder: MediaRecorder;
-  try {
-    recorder = new MediaRecorder(stream, options);
-  } catch {
-    recorder = new MediaRecorder(stream);
-  }
+  try { recorder = new MediaRecorder(stream, options); }
+  catch { recorder = new MediaRecorder(stream); }
 
   const chunks: Blob[] = [];
   const done = new Promise<Blob>((resolve, reject) => {
-    recorder.ondataavailable = (ev) => {
-      if (ev.data && ev.data.size > 0) chunks.push(ev.data);
-    };
+    recorder.ondataavailable = (ev) => { if (ev.data && ev.data.size > 0) chunks.push(ev.data); };
     recorder.onerror = (ev) => reject((ev as any).error ?? new Error('MediaRecorder error'));
     recorder.onstop = () => {
-      // ★ 実際に得られた最初のチャンクの type を採用（ここが重要）
       const effectiveType =
         (chunks[0] && chunks[0].type) ||
         (recorder as any).mimeType ||
@@ -444,37 +379,29 @@ async function encodeWithMediaRecorder(
     };
   });
 
-  // timeslice を与えて ondataavailable を確実化
-  recorder.start(100);
+  recorder.start(100); // timeslice指定で ondataavailable を安定化
+  const frameInterval = Math.max(4, Math.round(1000 / fps));
 
-  const frameInterval = Math.max(4, Math.round(1000 / fps)); // 最低 4ms
   const start = performance.now();
   for (let i = 0; i < frames.length; i++) {
     ctx.clearRect(0, 0, width, height);
-    try {
-      // eslint-disable-next-line no-await-in-loop
-      const drawable = await toDrawable(frames[i] as any, { width, height });
-      ctx.drawImage(drawable as any, 0, 0, width, height);
-    } catch (err) {
-      console.warn('drawImage fallback (blank frame):', err);
-      ctx.clearRect(0, 0, width, height);
-    }
+    // eslint-disable-next-line no-await-in-loop
+    const drawable = await toDrawable(frames[i] as any, { width, height });
+    ctx.drawImage(drawable as any, 0, 0, width, height);
     // eslint-disable-next-line no-await-in-loop
     await sleep(frameInterval);
   }
 
-  // 最低尺を確保（極端に短いと再生できないビューアがある）
-  const minDurationMs = Math.max(500, (frames.length / fps) * 1000);
+  // 最低 500ms 程度の尺を確保
+  const minMs = Math.max(500, (frames.length / fps) * 1000);
   const elapsed = performance.now() - start;
-  if (elapsed < minDurationMs) {
-    await sleep(minDurationMs - elapsed);
-  }
+  if (elapsed < minMs) await sleep(minMs - elapsed);
 
   recorder.stop();
   return done;
 }
 
-/* --- 録画直後の簡易再生検証（実際の blob.type で検証） --- */
+/* ---- 再生プローブ ---- */
 async function probePlayback(blob: Blob, timeoutMs = 4000): Promise<boolean> {
   try {
     const url = URL.createObjectURL(blob);
@@ -482,7 +409,6 @@ async function probePlayback(blob: Blob, timeoutMs = 4000): Promise<boolean> {
     v.preload = 'metadata';
     v.muted = true;
     v.src = url;
-
     const ok = await new Promise<boolean>((resolve) => {
       const to = setTimeout(() => { cleanup(); resolve(false); }, timeoutMs);
       function cleanup() {
@@ -497,12 +423,10 @@ async function probePlayback(blob: Blob, timeoutMs = 4000): Promise<boolean> {
       v.onerror = () => { cleanup(); resolve(false); };
     });
     return ok;
-  } catch {
-    return false;
-  }
+  } catch { return false; }
 }
 
-/* ---------------- ffmpeg.wasm 実装（存在すれば） ---------------- */
+/* ---------------- ffmpeg.wasm 実装 ---------------- */
 
 async function encodeWithFFmpeg(
   frames: AnyFrame[],
@@ -510,17 +434,13 @@ async function encodeWithFFmpeg(
   target: Mime,
 ): Promise<Blob> {
   const createFFmpeg = await getCreateFFmpeg();
-  if (!createFFmpeg) {
-    throw new Error('ffmpeg-unavailable');
-  }
+  if (!createFFmpeg) throw new Error('ffmpeg-unavailable');
 
   const ffmpeg = createFFmpeg({
     log: false,
-    corePath: '/ffmpeg/ffmpeg-core.js', // public/ffmpeg に配置している想定
+    corePath: '/ffmpeg/ffmpeg-core.js',
   });
-  if (!ffmpeg.isLoaded()) {
-    await ffmpeg.load();
-  }
+  if (!ffmpeg.isLoaded()) await ffmpeg.load();
 
   const firstDrawable = await toDrawable(frames[0] as any, { width: 720, height: 1280 });
   const { width, height } = detectSize(firstDrawable as any);
@@ -535,35 +455,16 @@ async function encodeWithFFmpeg(
   const out = target === 'video/webm' ? 'out.webm' : 'out.mp4';
   const args =
     target === 'video/webm'
-      ? [
-          '-framerate', String(fps),
-          '-i', 'frame_%05d.png',
-          '-c:v', 'libvpx-vp8',       // VP8 固定（互換性高）
-          '-b:v', '2M',
-          '-pix_fmt', 'yuv420p',
-          out,
-        ]
-      : [
-          '-framerate', String(fps),
-          '-i', 'frame_%05d.png',
-          '-c:v', 'libx264',
-          '-profile:v', 'baseline',
-          '-level', '3.1',
-          '-b:v', '2M',
-          '-pix_fmt', 'yuv420p',
-          '-movflags', '+faststart',
-          out,
-        ];
+      ? ['-framerate', String(fps), '-i', 'frame_%05d.png', '-c:v', 'libvpx-vp8', '-b:v', '2M', '-pix_fmt', 'yuv420p', out]
+      : ['-framerate', String(fps), '-i', 'frame_%05d.png', '-c:v', 'libx264', '-profile:v', 'baseline', '-level', '3.1', '-b:v', '2M', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', out];
 
   await ffmpeg.run(...args);
   const data = ffmpeg.FS('readFile', out);
 
   try {
-    for (let i = 0; i < frames.length; i++) {
-      ffmpeg.FS('unlink', `frame_${String(i).padStart(5, '0')}.png`);
-    }
+    for (let i = 0; i < frames.length; i++) ffmpeg.FS('unlink', `frame_${String(i).padStart(5, '0')}.png`);
     ffmpeg.FS('unlink', out);
-  } catch { /* noop */ }
+  } catch {}
 
   const mime = target === 'video/webm' ? 'video/webm' : 'video/mp4';
   return new Blob([data.buffer], { type: mime });
@@ -571,14 +472,9 @@ async function encodeWithFFmpeg(
 
 /* ---------------- 画像→PNG バイト列 ---------------- */
 
-function canvasSourceToPng(
-  src: CanvasImageSource,
-  width: number,
-  height: number,
-): Uint8Array {
+function canvasSourceToPng(src: CanvasImageSource, width: number, height: number): Uint8Array {
   const c = document.createElement('canvas');
-  c.width = width;
-  c.height = height;
+  c.width = width; c.height = height;
   const ctx = c.getContext('2d');
   if (!ctx) throw new Error('2D context unavailable');
   ctx.drawImage(src as any, 0, 0, width, height);
