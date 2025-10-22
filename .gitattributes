@@ -1,12 +1,11 @@
-# Git LFS tracking (current settings)
+# Git LFS tracking (legacy; kept for other binary types)
 public/models/u2net.onnx filter=lfs diff=lfs merge=lfs -text
-*.bin filter=lfs diff=lfs merge=lfs -text
+*.bin  filter=lfs diff=lfs merge=lfs -text
 *.ckpt filter=lfs diff=lfs merge=lfs -text
-*.pt filter=lfs diff=lfs merge=lfs -text
+*.pt   filter=lfs diff=lfs merge=lfs -text
 
-# --- Overrides: serve ONNX from repo (not LFS) ---
-# Ensure ONNX models are shipped as regular files for static hosting (e.g., Vercel).
+# --- Overrides: ONNX must be served as regular binary (no LFS, no EOL conversion) ---
 # Later rules override earlier ones.
-*.onnx -filter -diff -merge text
-public/models/u2net.onnx -filter -diff -merge text
-public/models/u2netp.onnx -filter -diff -merge text
+*.onnx -filter -diff -merge -text
+public/models/u2net.onnx   -filter -diff -merge -text
+public/models/u2netp.onnx  -filter -diff -merge -text
