@@ -1,0 +1,6 @@
+packages:
+  - "**"
+
+# 承認した依存のみ postinstall 等の build scripts を実行
+onlyBuiltDependencies:
+  - esbuild
