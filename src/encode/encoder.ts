@@ -40,9 +40,44 @@ function canCaptureStream(): boolean {
   );
 }
 
-export function getPreferredMimeType(): Mime {
-  return isIOS() ? 'video/mp4' : 'video/webm';
+// 実機の再生可否で優先MIMEを決定（iOS判定のみの誤差を回避）
+function canPlay(mime: Mime): boolean {
+  const v = document.createElement('video');
+  const candidates =
+    mime === 'video/mp4'
+      ? [
+          'video/mp4; codecs="avc1.42E01E,mp4a.40.2"',
+          'video/mp4; codecs="avc1.4d401e"',
+          'video/mp4',
+        ]
+      : [
+          'video/webm; codecs="vp9,opus"',
+          'video/webm; codecs="vp8,opus"',
+          'video/webm',
+        ];
+  return candidates.some((mt) => v.canPlayType(mt) !== '');
 }
+
+export function getPreferredMimeType(): Mime {
+  // デバッグ用強制指定（任意）
+  try {
+    const forced = localStorage.getItem('FORCE_MIME');
+    if (forced === 'mp4') return 'video/mp4';
+    if (forced === 'webm') return 'video/webm';
+  } catch {}
+  const mp4OK = canPlay('video/mp4');
+  const webmOK = canPlay('video/webm');
+
+  if (mp4OK && !webmOK) return 'video/mp4';
+  if (webmOK && !mp4OK) return 'video/webm';
+  if (mp4OK && webmOK) {
+    // iOS系はmp4優先、それ以外はwebm優先（好みの問題、どちらでも再生可）
+    return isIOS() ? 'video/mp4' : 'video/webm';
+  }
+  // どちらも微妙なら mp4（iOS互換を優先）
+  return 'video/mp4';
+}
+
 function altPreferred(mime: Mime): Mime {
   return mime === 'video/webm' ? 'video/mp4' : 'video/webm';
 }
@@ -311,7 +346,7 @@ export async function encodeVideoWithMeta(
     console.log('MediaRecorder skipped: captureStream() not supported or MediaRecorder missing.');
   }
 
-  // 2) ffmpeg.wasm（存在すれば）
+  // 2) ffmpeg.wasm（存在すれば）：確実にコンテナ化された動画を生成
   try {
     const blob = await encodeWithFFmpeg(frames, fps, primary);
     const mime = (blob.type || primary) as Mime;
@@ -331,7 +366,7 @@ export async function encodeVideoWithMeta(
 function pickMediaRecorderMime(target: Mime): string | undefined {
   const candidates =
     target === 'video/webm'
-      ? ['video/webm;codecs=vp8', 'video/webm;codecs=vp9', 'video/webm']
+      ? ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm;codecs=vp8', 'video/webm']
       : ['video/mp4;codecs=avc1.42E01E', 'video/mp4'];
   for (const c of candidates) {
     if ((window as any).MediaRecorder?.isTypeSupported?.(c)) return c;
@@ -392,7 +427,7 @@ async function encodeWithMediaRecorder(
     await sleep(frameInterval);
   }
 
-  // 最低 500ms 程度の尺を確保
+  // 最低 500ms 程度の尺を確保（極小ファイルの再生不可対策）
   const minMs = Math.max(500, (frames.length / fps) * 1000);
   const elapsed = performance.now() - start;
   if (elapsed < minMs) await sleep(minMs - elapsed);
@@ -438,7 +473,7 @@ async function encodeWithFFmpeg(
 
   const ffmpeg = createFFmpeg({
     log: false,
-    corePath: '/ffmpeg/ffmpeg-core.js',
+    corePath: '/ffmpeg/ffmpeg-core.js', // public/ffmpeg 配下に配置想定
   });
   if (!ffmpeg.isLoaded()) await ffmpeg.load();
 
@@ -455,8 +490,25 @@ async function encodeWithFFmpeg(
   const out = target === 'video/webm' ? 'out.webm' : 'out.mp4';
   const args =
     target === 'video/webm'
-      ? ['-framerate', String(fps), '-i', 'frame_%05d.png', '-c:v', 'libvpx-vp8', '-b:v', '2M', '-pix_fmt', 'yuv420p', out]
-      : ['-framerate', String(fps), '-i', 'frame_%05d.png', '-c:v', 'libx264', '-profile:v', 'baseline', '-level', '3.1', '-b:v', '2M', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', out];
+      ? [
+          '-framerate', String(fps),
+          '-i', 'frame_%05d.png',
+          '-c:v', 'libvpx-vp8', // 互換性重視（VP9にしたい場合は libvpx-vp9）
+          '-b:v', '2M',
+          '-pix_fmt', 'yuv420p',
+          out
+        ]
+      : [
+          '-framerate', String(fps),
+          '-i', 'frame_%05d.png',
+          '-c:v', 'libx264',
+          '-profile:v', 'baseline',
+          '-level', '3.1',
+          '-b:v', '2M',
+          '-pix_fmt', 'yuv420p',
+          '-movflags', '+faststart',
+          out
+        ];
 
   await ffmpeg.run(...args);
   const data = ffmpeg.FS('readFile', out);
