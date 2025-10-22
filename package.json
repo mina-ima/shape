@@ -16,6 +16,8 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@ffmpeg/ffmpeg": "^0.12.15",
+    "@ffmpeg/util": "^0.12.2",
     "@techstark/opencv-js": "4.11.0-release.1",
     "idb": "^8.0.3",
     "marked": "^16.4.0",
