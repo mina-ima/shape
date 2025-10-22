@@ -91,8 +91,8 @@ function isCanvasImageSource(x: unknown): x is CanvasImageSource {
     (g.SVGImageElement && x instanceof g.SVGImageElement) ||
     (g.VideoFrame && x instanceof g.VideoFrame) ||
     // 別Realm対策：主要プロパティで推定
-    ((x as any)?.getContext && (x as any)?.width && (x as any)?.height) || // Canvas系
-    ((x as any)?.close && (x as any)?.displayWidth && (x as any)?.displayHeight) // VideoFrameライク
+    ((x as any)?.getContext && (x as any)?.width && (x as any)?.height) ||
+    ((x as any)?.close && (x as any)?.displayWidth && (x as any)?.displayHeight)
   );
 }
 
@@ -106,7 +106,6 @@ function isImageDataLike(x: any): x is ImageDataLike {
 }
 
 function ensureUint8Clamped(buf: ArrayLike<number>): Uint8ClampedArray {
-  // Float32Array/Uint16Array/number[] を 0..255 にクリップして変換
   if (buf instanceof Uint8ClampedArray) return buf;
   if (buf instanceof Uint8Array) return new Uint8ClampedArray(buf.buffer, buf.byteOffset, buf.byteLength);
   const out = new Uint8ClampedArray(buf.length);
@@ -120,22 +119,15 @@ function ensureUint8Clamped(buf: ArrayLike<number>): Uint8ClampedArray {
   return out;
 }
 
-/** TSのlib.domで ImageData コンストラクタが ArrayBuffer を要求するケース対策。
- *  常に新しい ArrayBuffer へコピーしてから ImageData を生成する。 */
+/** TSのlib.domで ImageData コンストラクタが ArrayBuffer を要求するケース対策。 */
 function makeImageData(data: Uint8ClampedArray, w: number, h: number): ImageData {
   const expectedLen = w * h * 4;
   const copy = new Uint8ClampedArray(expectedLen);
-  if (data.length === expectedLen) {
-    copy.set(data);
-  } else {
-    // 長さが異なる/チャンネル変換直後などは切り詰め or 0埋め
-    copy.set(data.subarray(0, Math.min(expectedLen, data.length)));
-  }
+  copy.set(data.subarray(0, Math.min(expectedLen, data.length)));
   return new ImageData(copy, w, h);
 }
 
 function expandToRgba(buf: Uint8ClampedArray, w: number, h: number, channels: number): Uint8ClampedArray {
-  // channels=1(グレースケール)や3(RGB)をRGBAへ拡張
   if (channels === 4) return buf;
   const out = new Uint8ClampedArray(w * h * 4);
   if (channels === 1) {
@@ -148,7 +140,6 @@ function expandToRgba(buf: Uint8ClampedArray, w: number, h: number, channels: nu
       out[j] = buf[i]; out[j + 1] = buf[i + 1]; out[j + 2] = buf[i + 2]; out[j + 3] = 255;
     }
   } else {
-    // 未知チャンネル数はα=255で切り上げ（長さが合わない場合は0埋め）
     for (let i = 0, j = 0; j < out.length; i += channels, j += 4) {
       out[j] = buf[i] ?? 0;
       out[j + 1] = buf[i + 1] ?? 0;
@@ -234,14 +225,14 @@ async function toDrawable(
     return c;
   }
 
-  // TypedArray / ArrayBuffer（RGBA想定、もしくは後段で拡張）
+  // TypedArray / ArrayBuffer / number[]
   if (
     src instanceof Uint8Array ||
     src instanceof Uint8ClampedArray ||
     src instanceof Uint16Array ||
     src instanceof Float32Array ||
     src instanceof ArrayBuffer ||
-    Array.isArray(src) // number[]
+    Array.isArray(src)
   ) {
     const w = fallbackSize?.width ?? 720;
     const h = fallbackSize?.height ?? 1280;
@@ -264,7 +255,8 @@ async function toDrawable(
   // {pixels|data,width,height}
   if (typeof src === 'object' && src) {
     const maybe = src as any;
-    // {type:'png', data:'base64...'} / {format:'image/png', base64:'...'} に対応
+
+    // {type:'png', data:'base64...'} / {format:'image/png', base64:'...'}
     if (typeof maybe.base64 === 'string' || typeof maybe.data === 'string') {
       const b64 = (maybe.base64 ?? maybe.data) as string;
       const mime = (maybe.format ?? maybe.type ?? 'image/png') as string;
@@ -278,7 +270,6 @@ async function toDrawable(
     if ((maybe.pixels || maybe.data) && typeof maybe.width === 'number' && typeof maybe.height === 'number') {
       const w = maybe.width, h = maybe.height;
       const raw = maybe.pixels ?? maybe.data;
-      // ArrayBufferView/配列/ArrayBufferすべて受理
       const buf = ArrayBuffer.isView(raw)
         ? ensureUint8Clamped(raw as any)
         : Array.isArray(raw)
@@ -296,10 +287,10 @@ async function toDrawable(
       ctx.putImageData(id, 0, 0);
       return c;
     }
+
     // {url|src} 文字列を持つ場合（http/https/blob/data:）
     const rawUrl = (maybe.url ?? maybe.src) as string | undefined;
     if (typeof rawUrl === 'string') {
-      // data: かつ image/* でなくてもまず試す（画像なら解釈される）
       const img = await loadImage(rawUrl);
       return img;
     }
@@ -310,21 +301,17 @@ async function toDrawable(
     try {
       const bmp = await createImageBitmap(src);
       return bmp;
-    } catch {
-      // 画像Blobでなければこの経路は不可
-    }
+    } catch { /* noop */ }
   }
 
   // 文字列（dataURL / http(s) / blob: / プレーンBase64）
   if (typeof src === 'string') {
     const s = src as string;
     if (s.startsWith('data:')) {
-      // image/* 以外でも画像データなら描画可能なのでまず試す
       try {
         const img = await loadImage(s);
         return img;
       } catch {
-        // data:application/octet-stream;base64,... のような場合は手動復号を試す
         const m = s.match(/^data:(.*?);base64,(.*)$/);
         if (m) {
           const mime = m[1] || 'image/png';
@@ -335,9 +322,9 @@ async function toDrawable(
       }
     }
     if (s.startsWith('blob:') || s.startsWith('http://') || s.startsWith('https://')) {
-      return await loadImage(s); // CORS注意だが同一オリジン/Blob想定
+      return await loadImage(s);
     }
-    // プレーンBase64（接頭辞なし）推定：A–Z/a–z/0–9/+/= のみ
+    // プレーンBase64推定
     if (/^[A-Za-z0-9+/=]+$/.test(s) && s.length > 100) {
       const blob = base64ToBlob(s, 'image/png');
       const bmp = await createImageBitmap(blob);
@@ -345,19 +332,23 @@ async function toDrawable(
     }
   }
 
-  throw new TypeError('toDrawable: unsupported frame type for drawImage');
-}
-
-async function normalizeFrames(frames: AnyFrame[]): Promise<CanvasImageSource[]> {
-  if (!frames?.length) throw new Error('encodeVideo: frames is empty');
-  const size = detectSize(frames[0] as any);
-  const out: CanvasImageSource[] = [];
-  for (const f of frames) {
-    // eslint-disable-next-line no-await-in-loop
-    const d = await toDrawable(f, size);
-    out.push(d);
+  // ---- 最後の逃げ道：OffscreenCanvasに toDataURL 経由で描画を試みる ----
+  if (fallbackSize) {
+    const oc = (globalThis as any).OffscreenCanvas
+      ? new (globalThis as any).OffscreenCanvas(fallbackSize.width, fallbackSize.height)
+      : null;
+    if (oc) {
+      const c = document.createElement('canvas');
+      c.width = fallbackSize.width; c.height = fallbackSize.height;
+      const ctx = c.getContext('2d');
+      if (!ctx) throw new Error('2D context unavailable');
+      // 何も描けないが「空フレーム」を返してエンコードを継続（完全停止よりマシ）
+      ctx.clearRect(0, 0, c.width, c.height);
+      return c;
+    }
   }
-  return out;
+
+  throw new TypeError('toDrawable: unsupported frame type for drawImage');
 }
 
 /* ---------------- パブリックAPI ---------------- */
@@ -371,27 +362,26 @@ export async function encodeVideo(
   return blob;
 }
 
-/** 新API：メタ付き */
+/** 新API：メタ付き（★ 事前正規化はしない。各エンコーダ内で lazy に変換） */
 export async function encodeVideoWithMeta(
   frames: AnyFrame[],
   { fps, preferredMime }: EncodeOptions,
 ): Promise<{ blob: Blob; filename: string; mime: Mime }> {
+  if (!frames?.length) throw new Error('encodeVideo: frames is empty');
+
   const primary: Mime = preferredMime ?? getPreferredMimeType();
   const secondary: Mime = alternativeOf(primary);
 
-  // まずフレームを drawImage 可能な型に正規化（MediaRecorder/ffmpeg 共用）
-  const drawable = await normalizeFrames(frames);
-
-  // 1) MediaRecorder（captureStream必須）
+  // 1) MediaRecorder（captureStream必須）— 内部で lazy 変換
   if (typeof (globalThis as any).MediaRecorder === 'function' && canCaptureStream()) {
     try {
-      const blob = await encodeWithMediaRecorder(drawable, fps, primary);
+      const blob = await encodeWithMediaRecorder(frames, fps, primary);
       console.log(`Encoded with MediaRecorder as ${primary}`);
       return { blob, filename: `output.${extOf(primary)}`, mime: primary };
     } catch (e1) {
       console.warn(`MediaRecorder failed with ${primary}`, e1);
       try {
-        const blob = await encodeWithMediaRecorder(drawable, fps, secondary);
+        const blob = await encodeWithMediaRecorder(frames, fps, secondary);
         console.log(`Encoded with MediaRecorder as ${secondary}`);
         return { blob, filename: `output.${extOf(secondary)}`, mime: secondary };
       } catch (e2) {
@@ -403,27 +393,29 @@ export async function encodeVideoWithMeta(
     console.log('MediaRecorder skipped: captureStream() not supported or MediaRecorder missing.');
   }
 
-  // 2) ffmpeg.wasm（依存が無ければスキップ）
+  // 2) ffmpeg.wasm（依存が無ければスキップ）— 内部で lazy 変換
   try {
-    const blob = await encodeWithFFmpeg(drawable, fps, primary);
+    const blob = await encodeWithFFmpeg(frames, fps, primary);
     console.log(`Encoded with ffmpeg.wasm as ${primary}`);
     return { blob, filename: `output.${extOf(primary)}`, mime: primary };
   } catch (e3) {
     console.warn(`ffmpeg.wasm failed with ${primary}`, e3);
-    const blob = await encodeWithFFmpeg(drawable, fps, secondary);
+    const blob = await encodeWithFFmpeg(frames, fps, secondary);
     console.log(`Encoded with ffmpeg.wasm as ${secondary}`);
     return { blob, filename: `output.${extOf(secondary)}`, mime: secondary };
   }
 }
 
-/* ---------------- MediaRecorder 実装 ---------------- */
+/* ---------------- MediaRecorder 実装（lazy 変換） ---------------- */
 
 async function encodeWithMediaRecorder(
-  frames: CanvasImageSource[],
+  frames: AnyFrame[],
   fps: number,
   mime: Mime,
 ): Promise<Blob> {
-  const { width, height } = detectSize(frames[0] as any);
+  // 最初のフレームからサイズ推定（未確定ならデフォルト）
+  const firstDrawable = await toDrawable(frames[0] as any, { width: 720, height: 1280 });
+  const { width, height } = detectSize(firstDrawable as any);
 
   const canvas = document.createElement('canvas');
   canvas.width = width;
@@ -456,12 +448,14 @@ async function encodeWithMediaRecorder(
   for (let i = 0; i < frames.length; i++) {
     ctx.clearRect(0, 0, width, height);
     try {
-      ctx.drawImage(frames[i] as any, 0, 0, width, height);
-    } catch {
-      // 念のための二重防御（ここに来ることは通常ない）
+      // 各フレームごとに lazy で toDrawable
       // eslint-disable-next-line no-await-in-loop
-      const bmp = await toDrawable(frames[i] as any, { width, height });
-      ctx.drawImage(bmp as any, 0, 0, width, height);
+      const drawable = await toDrawable(frames[i] as any, { width, height });
+      ctx.drawImage(drawable as any, 0, 0, width, height);
+    } catch (err) {
+      console.warn('drawImage fallback (blank frame):', err);
+      // 描けない場合は透明フレームで継続（完全停止よりユーザ体験を優先）
+      ctx.clearRect(0, 0, width, height);
     }
     // eslint-disable-next-line no-await-in-loop
     await sleep(frameInterval);
@@ -471,10 +465,10 @@ async function encodeWithMediaRecorder(
   return done;
 }
 
-/* ---------------- ffmpeg.wasm 実装 ---------------- */
+/* ---------------- ffmpeg.wasm 実装（lazy 変換） ---------------- */
 
 async function encodeWithFFmpeg(
-  frames: CanvasImageSource[],
+  frames: AnyFrame[],
   fps: number,
   mime: Mime,
 ): Promise<Blob> {
@@ -491,10 +485,13 @@ async function encodeWithFFmpeg(
     await ffmpeg.load();
   }
 
-  const { width, height } = detectSize(frames[0] as any);
+  const firstDrawable = await toDrawable(frames[0] as any, { width: 720, height: 1280 });
+  const { width, height } = detectSize(firstDrawable as any);
 
   for (let i = 0; i < frames.length; i++) {
-    const png = canvasSourceToPng(frames[i], width, height);
+    // eslint-disable-next-line no-await-in-loop
+    const drawable = await toDrawable(frames[i] as any, { width, height });
+    const png = canvasSourceToPng(drawable as any, width, height);
     await ffmpeg.FS('writeFile', `frame_${String(i).padStart(5, '0')}.png`, png);
   }
 
