@@ -75,7 +75,8 @@ type AnyFrame =
   | number[]
   | Blob
   | string
-  | { pixels?: any; data?: any; width?: number; height?: number; channels?: number; url?: string; src?: string }
+  | Promise<any>
+  | { pixels?: any; data?: any; width?: number; height?: number; channels?: number; url?: string; src?: string; type?: string; format?: string; base64?: string }
   | { canvas?: any; bitmap?: any | Promise<any>; image?: any; video?: any }; // ラッパー系
 
 function isCanvasImageSource(x: unknown): x is CanvasImageSource {
@@ -168,10 +169,23 @@ function loadImage(url: string): Promise<HTMLImageElement> {
   });
 }
 
+function base64ToBlob(b64: string, mime = 'image/png'): Blob {
+  const bin = atob(b64);
+  const u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  return new Blob([u8], { type: mime });
+}
+
 async function toDrawable(
   src: AnyFrame,
   fallbackSize?: { width: number; height: number },
 ): Promise<CanvasImageSource> {
+  // Promiseを許容（上位からPromiseが来るケース）
+  if (src && typeof (src as Promise<any>).then === 'function') {
+    const resolved = await (src as Promise<any>);
+    return toDrawable(resolved, fallbackSize); // 再帰
+  }
+
   // そのまま使える型
   if (isCanvasImageSource(src)) return src as CanvasImageSource;
 
@@ -250,11 +264,28 @@ async function toDrawable(
   // {pixels|data,width,height}
   if (typeof src === 'object' && src) {
     const maybe = src as any;
+    // {type:'png', data:'base64...'} / {format:'image/png', base64:'...'} に対応
+    if (typeof maybe.base64 === 'string' || typeof maybe.data === 'string') {
+      const b64 = (maybe.base64 ?? maybe.data) as string;
+      const mime = (maybe.format ?? maybe.type ?? 'image/png') as string;
+      try {
+        const blob = base64ToBlob(b64.replace(/^data:.*;base64,/, ''), mime);
+        const bmp = await createImageBitmap(blob);
+        return bmp;
+      } catch { /* fallthrough */ }
+    }
+
     if ((maybe.pixels || maybe.data) && typeof maybe.width === 'number' && typeof maybe.height === 'number') {
       const w = maybe.width, h = maybe.height;
       const raw = maybe.pixels ?? maybe.data;
-      // ArrayBufferView/配列すべて受理
-      const buf = ArrayBuffer.isView(raw) || Array.isArray(raw) ? ensureUint8Clamped(raw as any) : ensureUint8Clamped(new Uint8Array(raw));
+      // ArrayBufferView/配列/ArrayBufferすべて受理
+      const buf = ArrayBuffer.isView(raw)
+        ? ensureUint8Clamped(raw as any)
+        : Array.isArray(raw)
+        ? ensureUint8Clamped(raw as any)
+        : raw instanceof ArrayBuffer
+        ? ensureUint8Clamped(new Uint8Array(raw))
+        : ensureUint8Clamped(new Uint8Array(raw as ArrayBufferLike));
       const channels = maybe.channels ?? 4;
       const rgba = channels === 4 ? buf : expandToRgba(buf, w, h, channels);
       const c = document.createElement('canvas');
@@ -268,6 +299,7 @@ async function toDrawable(
     // {url|src} 文字列を持つ場合（http/https/blob/data:）
     const rawUrl = (maybe.url ?? maybe.src) as string | undefined;
     if (typeof rawUrl === 'string') {
+      // data: かつ image/* でなくてもまず試す（画像なら解釈される）
       const img = await loadImage(rawUrl);
       return img;
     }
@@ -283,15 +315,33 @@ async function toDrawable(
     }
   }
 
-  // 文字列（dataURL / http(s) / blob:）
+  // 文字列（dataURL / http(s) / blob: / プレーンBase64）
   if (typeof src === 'string') {
     const s = src as string;
     if (s.startsWith('data:')) {
-      // image/* 以外でも画像データなら描画可能なので一旦トライ
-      return await loadImage(s);
+      // image/* 以外でも画像データなら描画可能なのでまず試す
+      try {
+        const img = await loadImage(s);
+        return img;
+      } catch {
+        // data:application/octet-stream;base64,... のような場合は手動復号を試す
+        const m = s.match(/^data:(.*?);base64,(.*)$/);
+        if (m) {
+          const mime = m[1] || 'image/png';
+          const blob = base64ToBlob(m[2], mime);
+          const bmp = await createImageBitmap(blob);
+          return bmp;
+        }
+      }
     }
     if (s.startsWith('blob:') || s.startsWith('http://') || s.startsWith('https://')) {
       return await loadImage(s); // CORS注意だが同一オリジン/Blob想定
+    }
+    // プレーンBase64（接頭辞なし）推定：A–Z/a–z/0–9/+/= のみ
+    if (/^[A-Za-z0-9+/=]+$/.test(s) && s.length > 100) {
+      const blob = base64ToBlob(s, 'image/png');
+      const bmp = await createImageBitmap(blob);
+      return bmp;
     }
   }
 
