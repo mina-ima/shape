@@ -1,5 +1,16 @@
+// src/encode/encoder.ts
 /* eslint-disable no-console */
-import { createFFmpeg } from '@ffmpeg/ffmpeg';
+
+/* ---------------- ffmpeg ローダ（named/default 両対応） ---------------- */
+async function getCreateFFmpeg(): Promise<any> {
+  // Vercel / pnpm での解決差異に対応：dynamic import で named/default の両方に耐える
+  const mod: any = await import('@ffmpeg/ffmpeg');
+  const create = mod?.createFFmpeg ?? mod?.default?.createFFmpeg;
+  if (!create) {
+    throw new Error('createFFmpeg not found in @ffmpeg/ffmpeg (check package version)');
+  }
+  return create;
+}
 
 type Mime = 'video/webm' | 'video/mp4';
 
@@ -7,6 +18,9 @@ export interface EncodeOptions {
   fps: number;
   preferredMime?: Mime; // 明示指定があれば優先
 }
+
+// 旧API互換：fps:number でも EncodeOptions でも受け付ける
+type EncodeInput = number | EncodeOptions;
 
 /* ---------------- 判定ユーティリティ ---------------- */
 
@@ -43,10 +57,27 @@ function extOf(mime: Mime): 'webm' | 'mp4' {
   return mime === 'video/webm' ? 'webm' : 'mp4';
 }
 
+function normalizeOptions(opts: EncodeInput): EncodeOptions {
+  return typeof opts === 'number' ? { fps: opts } : opts;
+}
+
 /* ---------------- パブリックAPI ---------------- */
 
-// frames: drawImage可能なソース(Canvas/ImageBitmap/HTMLVideoElement等)
+/**
+ * 旧API互換：Blob を返す。呼び出し側が `encodeVideo(frames, 30)` のままでOK。
+ */
 export async function encodeVideo(
+  frames: CanvasImageSource[],
+  opts: EncodeInput,
+): Promise<Blob> {
+  const { blob } = await encodeVideoWithMeta(frames, normalizeOptions(opts));
+  return blob; // ← Blob を返す（store.tsの期待どおり）
+}
+
+/**
+ * 新API：メタ情報付きで返す（必要なら呼び出し側でこちらを利用可）
+ */
+export async function encodeVideoWithMeta(
   frames: CanvasImageSource[],
   { fps, preferredMime }: EncodeOptions,
 ): Promise<{ blob: Blob; filename: string; mime: Mime }> {
@@ -54,7 +85,7 @@ export async function encodeVideo(
     throw new Error('encodeVideo: frames is empty');
   }
 
-  const primary: Mime = (preferredMime ?? getPreferredMimeType());
+  const primary: Mime = preferredMime ?? getPreferredMimeType();
   const secondary: Mime = alternativeOf(primary);
 
   // 1) MediaRecorder（captureStream必須）
@@ -151,9 +182,7 @@ async function encodeWithFFmpeg(
   fps: number,
   mime: Mime,
 ): Promise<Blob> {
-  const { width, height } = detectSize(frames[0]);
-
-  // 連番PNGを仮想FSへ書き出し
+  const createFFmpeg = await getCreateFFmpeg();
   const ffmpeg = createFFmpeg({
     log: false,
     // プロジェクトの配置に合わせて調整（public/ffmpeg/… に置く想定）
@@ -163,6 +192,9 @@ async function encodeWithFFmpeg(
     await ffmpeg.load();
   }
 
+  const { width, height } = detectSize(frames[0]);
+
+  // 連番PNGを仮想FSへ書き出し
   for (let i = 0; i < frames.length; i++) {
     const png = canvasSourceToPng(frames[i], width, height);
     await ffmpeg.FS('writeFile', `frame_${String(i).padStart(5, '0')}.png`, png);
