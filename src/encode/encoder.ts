@@ -9,14 +9,9 @@ async function getCreateFFmpeg(): Promise<null | ((opts: any) => any)> {
     const create = mod?.createFFmpeg ?? mod?.default?.createFFmpeg;
     if (typeof create !== "function") return null;
 
-    // corePath を呼び出し側が未指定なら以下の順で解決:
-    // 1) /ffmpeg/ffmpeg-core.js（public 配下）
-    // 2) 既定解決（bundler/CDN）
+    // 既定では corePath を強制しない（CDN 自動解決）。必要なら呼び出し側が opts.corePath 指定。
     const wrapped = (opts: any = {}) => {
-      const corePath =
-        opts.corePath ??
-        (typeof window !== "undefined" ? "/ffmpeg/ffmpeg-core.js" : undefined);
-      return create({ log: false, ...opts, corePath });
+      return create({ log: false, ...opts });
     };
     return wrapped;
   } catch {
@@ -429,9 +424,7 @@ export async function encodeVideoWithMeta(
       console.log("[Encode] MediaRecorder-1 type/size:", blob1.type, blob1.size);
 
       if (await needsRemuxOrReencode(blob1)) {
-        console.warn(
-          "[Encode] MR-1 output looks fragmented/too small → ffmpeg fix…",
-        );
+        console.warn("[Encode] MR-1 output looks fragmented/too small → ffmpeg fix…");
         const fixed = await fixWithFFmpeg(blob1, fps);
         return { blob: fixed, filename: "output.mp4", mime: "video/mp4" };
       }
@@ -441,16 +434,12 @@ export async function encodeVideoWithMeta(
         return { blob: blob1, filename: name1, mime: mime1 };
       }
 
-      console.warn(
-        "Playback probe failed. Retrying with alternate MediaRecorder settings…",
-      );
+      console.warn("Playback probe failed. Retrying with alternate MediaRecorder settings…");
       const blob2 = await encodeWithMediaRecorder(framesSafe, fps, secondary);
       console.log("[Encode] MediaRecorder-2 type/size:", blob2.type, blob2.size);
 
       if (await needsRemuxOrReencode(blob2)) {
-        console.warn(
-          "[Encode] MR-2 output looks fragmented/too small → ffmpeg fix…",
-        );
+        console.warn("[Encode] MR-2 output looks fragmented/too small → ffmpeg fix…");
         const fixed = await fixWithFFmpeg(blob2, fps);
         return { blob: fixed, filename: "output.mp4", mime: "video/mp4" };
       }
@@ -463,9 +452,7 @@ export async function encodeVideoWithMeta(
       console.warn("MediaRecorder path failed", e1);
     }
   } else {
-    console.log(
-      "MediaRecorder skipped: captureStream() not supported or MediaRecorder missing.",
-    );
+    console.log("MediaRecorder skipped: captureStream() not supported or MediaRecorder missing.");
   }
 
   // 2) ffmpeg.wasm（確実な mp4 生成: H.264 Baseline + yuv420p + faststart）
@@ -508,17 +495,13 @@ function pickMediaRecorderMime(target: Mime): string | undefined {
 async function sniffContainerMime(blob: Blob): Promise<Mime | null> {
   if (!blob || blob.size < 12) return null;
   try {
-    const head = new Uint8Array(
-      await blob.slice(0, Math.min(4096, blob.size)).arrayBuffer(),
-    );
+    const head = new Uint8Array(await blob.slice(0, Math.min(4096, blob.size)).arrayBuffer());
     // WebM (Matroska/EBML): 0x1A 45 DF A3
-    const isWebM =
-      head[0] === 0x1a && head[1] === 0x45 && head[2] === 0xdf && head[3] === 0xa3;
+    const isWebM = head[0] === 0x1a && head[1] === 0x45 && head[2] === 0xdf && head[3] === 0xa3;
     if (isWebM) return "video/webm";
 
-    // ISO-BMFF/MP4: [size(4 bytes)] + 'ftyp'（ASCII）→ 4バイト目から 'f' 't' 'y' 'p'
-    const isMP4 =
-      head[4] === 0x66 && head[5] === 0x74 && head[6] === 0x79 && head[7] === 0x70;
+    // ISO-BMFF/MP4: [size(4 bytes)] + 'ftyp'
+    const isMP4 = head[4] === 0x66 && head[5] === 0x74 && head[6] === 0x79 && head[7] === 0x70;
     if (isMP4) return "video/mp4";
   } catch {}
   return null;
@@ -534,10 +517,7 @@ async function encodeWithMediaRecorder(
   fps: number,
   target: Mime,
 ): Promise<Blob> {
-  const firstDrawable = await toDrawable(frames[0] as any, {
-    width: 720,
-    height: 1280,
-  });
+  const firstDrawable = await toDrawable(frames[0] as any, { width: 720, height: 1280 });
   const { width, height } = detectSize(firstDrawable as any);
 
   const canvas = document.createElement("canvas");
@@ -571,6 +551,7 @@ async function encodeWithMediaRecorder(
     recorder.onstart = () => resolve();
     recorder.onerror = (ev: any) => reject(ev?.error ?? new Error("MR error"));
   });
+
   const done = new Promise<Blob>((resolve, reject) => {
     recorder.ondataavailable = (ev) => {
       if (ev.data && ev.data.size > 0) {
@@ -579,7 +560,7 @@ async function encodeWithMediaRecorder(
       }
     };
     recorder.onstop = async () => {
-      // まずは recorder / options / chunk type から推定
+      // recorder/options/chunk type から推定
       const guessed =
         (chunkType && chunkType.split(";")[0]) ||
         ((recorder as any).mimeType?.split?.(";")?.[0]) ||
@@ -588,12 +569,10 @@ async function encodeWithMediaRecorder(
 
       let out = new Blob(chunks, { type: guessed });
 
-      // ★ ここが決定打：シグネチャで実コンテナを最終確認して MIME を補正
+      // シグネチャで実コンテナを最終確認して MIME を補正
       const sniffed = await sniffContainerMime(out);
       if (sniffed && !guessed.startsWith(sniffed)) {
-        console.warn(
-          `[Encode] MIME corrected by signature: ${guessed} → ${sniffed}`,
-        );
+        console.warn(`[Encode] MIME corrected by signature: ${guessed} → ${sniffed}`);
         out = setBlobType(out, sniffed);
       }
 
@@ -636,10 +615,7 @@ async function encodeWithMediaRecorder(
 }
 
 /* ---- 再生可否プローブ ---- */
-async function isPlayableOnThisBrowser(
-  blob: Blob,
-  timeoutMs = 5000,
-): Promise<boolean> {
+async function isPlayableOnThisBrowser(blob: Blob, timeoutMs = 5000): Promise<boolean> {
   if (!blob || blob.size < 20_000) return false;
   const t = (blob.type || "").toLowerCase();
   if (isSafari() && /webm/.test(t)) return false;
@@ -676,8 +652,7 @@ async function isPlayableOnThisBrowser(
       };
       v.onplaying = () => {
         setTimeout(() => {
-          const yes =
-            progressed && v.readyState >= 2 && isFinite(v.duration) && v.duration > 0;
+          const yes = progressed && v.readyState >= 2 && isFinite(v.duration) && v.duration > 0;
           cleanup();
           resolve(yes);
         }, 150);
@@ -726,15 +701,7 @@ async function fixWithFFmpeg(src: Blob, fps: number): Promise<Blob> {
 
   if (/mp4/.test(type)) {
     // コピーコーデックで MP4 を progressive に（moov を先頭へ）
-    await ffmpeg.run(
-      "-i",
-      "in.bin",
-      "-c",
-      "copy",
-      "-movflags",
-      "+faststart",
-      outName,
-    );
+    await ffmpeg.run("-i", "in.bin", "-c", "copy", "-movflags", "+faststart", outName);
   } else {
     // それ以外は h264 baseline + yuv420p に再エンコード
     await ffmpeg.run(
@@ -765,10 +732,7 @@ async function fixWithFFmpeg(src: Blob, fps: number): Promise<Blob> {
 }
 
 /* ---- 最終フォールバック用（保存可能な Blob を作る） ---- */
-async function safeBestEffortMedia(
-  frames: AnyFrame[],
-  fps: number,
-): Promise<Blob> {
+async function safeBestEffortMedia(frames: AnyFrame[], fps: number): Promise<Blob> {
   try {
     const b = await encodeWithMediaRecorder(frames, fps, getPreferredMimeType());
     if (b && b.size > 0) return b;
@@ -780,21 +744,14 @@ async function safeBestEffortMedia(
 
 /* ---------------- ffmpeg.wasm での新規エンコード ---------------- */
 
-async function encodeWithFFmpeg(
-  frames: AnyFrame[],
-  fps: number,
-  target: Mime,
-): Promise<Blob> {
+async function encodeWithFFmpeg(frames: AnyFrame[], fps: number, target: Mime): Promise<Blob> {
   const createFFmpeg = await getCreateFFmpeg();
   if (!createFFmpeg) throw new Error("ffmpeg-unavailable");
 
   const ffmpeg = createFFmpeg({});
   if (!ffmpeg.isLoaded()) await ffmpeg.load();
 
-  const firstDrawable = await toDrawable(frames[0] as any, {
-    width: 720,
-    height: 1280,
-  });
+  const firstDrawable = await toDrawable(frames[0] as any, { width: 720, height: 1280 });
   const { width, height } = detectSize(firstDrawable as any);
 
   for (let i = 0; i < frames.length; i++) {
@@ -844,8 +801,7 @@ async function encodeWithFFmpeg(
   const data = ffmpeg.FS("readFile", out); // Uint8Array
 
   try {
-    for (let i = 0; i < frames.length; i++)
-      ffmpeg.FS("unlink", `frame_${String(i).padStart(5, "0")}.png`);
+    for (let i = 0; i < frames.length; i++) ffmpeg.FS("unlink", `frame_${String(i).padStart(5, "0")}.png`);
     ffmpeg.FS("unlink", out);
   } catch {}
 
@@ -855,11 +811,7 @@ async function encodeWithFFmpeg(
 
 /* ---------------- 画像→PNG バイト列 ---------------- */
 
-function canvasSourceToPng(
-  src: CanvasImageSource,
-  width: number,
-  height: number,
-): Uint8Array {
+function canvasSourceToPng(src: CanvasImageSource, width: number, height: number): Uint8Array {
   const c = document.createElement("canvas");
   c.width = width;
   c.height = height;
