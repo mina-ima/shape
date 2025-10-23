@@ -49,3 +49,8 @@
     "vitest": "3.2.4"
   }
 }
+{
+  "scripts": {
+    "vercel-build": "git lfs fetch --all && git lfs checkout && vite build"
+  }
+}
