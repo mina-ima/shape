@@ -477,9 +477,10 @@ export async function encodeVideoWithMeta(
     console.warn("ffmpeg.wasm unavailable or failed:", e);
     // どうしても ffmpeg が使えない環境向けの最終フォールバック
     const tryBlob = await safeBestEffortMedia(framesSafe, fps);
-    const mime = (tryBlob.type || getPreferredMimeType()) as Mime;
+    const sniffed = await sniffContainerMime(tryBlob);
+    const mime = (sniffed || tryBlob.type || getPreferredMimeType()) as Mime;
     const name = mime === "video/mp4" ? "output.mp4" : "output.webm";
-    return { blob: tryBlob, filename: name, mime };
+    return { blob: setBlobType(tryBlob, mime), filename: name, mime };
   }
 }
 
@@ -501,6 +502,31 @@ function pickMediaRecorderMime(target: Mime): string | undefined {
     if ((window as any).MediaRecorder?.isTypeSupported?.(c)) return c;
   }
   return undefined;
+}
+
+/* ---- 追加：コンテナシグネチャ優先の MIME 推定 ---- */
+async function sniffContainerMime(blob: Blob): Promise<Mime | null> {
+  if (!blob || blob.size < 12) return null;
+  try {
+    const head = new Uint8Array(
+      await blob.slice(0, Math.min(4096, blob.size)).arrayBuffer(),
+    );
+    // WebM (Matroska/EBML): 0x1A 45 DF A3
+    const isWebM =
+      head[0] === 0x1a && head[1] === 0x45 && head[2] === 0xdf && head[3] === 0xa3;
+    if (isWebM) return "video/webm";
+
+    // ISO-BMFF/MP4: [size(4 bytes)] + 'ftyp'（ASCII）→ 4バイト目から 'f' 't' 'y' 'p'
+    const isMP4 =
+      head[4] === 0x66 && head[5] === 0x74 && head[6] === 0x79 && head[7] === 0x70;
+    if (isMP4) return "video/mp4";
+  } catch {}
+  return null;
+}
+
+// Blob のペイロードはそのままに MIME だけ付け替える
+function setBlobType(src: Blob, mime: string): Blob {
+  return new Blob([src], { type: mime });
 }
 
 async function encodeWithMediaRecorder(
@@ -539,22 +565,40 @@ async function encodeWithMediaRecorder(
   }
 
   const chunks: Blob[] = [];
+  let chunkType: string | undefined;
+
   const started = new Promise<void>((resolve, reject) => {
     recorder.onstart = () => resolve();
     recorder.onerror = (ev: any) => reject(ev?.error ?? new Error("MR error"));
   });
   const done = new Promise<Blob>((resolve, reject) => {
     recorder.ondataavailable = (ev) => {
-      if (ev.data && ev.data.size > 0) chunks.push(ev.data);
+      if (ev.data && ev.data.size > 0) {
+        chunks.push(ev.data);
+        if (!chunkType && ev.data.type) chunkType = ev.data.type;
+      }
     };
-    recorder.onstop = () => {
-      const effectiveType =
-        (chunks[0] && chunks[0].type) ||
-        (recorder as any).mimeType ||
-        (options as any).mimeType ||
+    recorder.onstop = async () => {
+      // まずは recorder / options / chunk type から推定
+      const guessed =
+        (chunkType && chunkType.split(";")[0]) ||
+        ((recorder as any).mimeType?.split?.(";")?.[0]) ||
+        ((options as any).mimeType?.split?.(";")?.[0]) ||
         target;
+
+      let out = new Blob(chunks, { type: guessed });
+
+      // ★ ここが決定打：シグネチャで実コンテナを最終確認して MIME を補正
+      const sniffed = await sniffContainerMime(out);
+      if (sniffed && !guessed.startsWith(sniffed)) {
+        console.warn(
+          `[Encode] MIME corrected by signature: ${guessed} → ${sniffed}`,
+        );
+        out = setBlobType(out, sniffed);
+      }
+
       try {
-        resolve(new Blob(chunks, { type: effectiveType }));
+        resolve(out);
       } catch (e) {
         reject(e);
       }
