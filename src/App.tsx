@@ -4,7 +4,7 @@ import { useStore, MAX_RETRIES } from "./core/store";
 import SegmentationDemo from "./ui/SegmentationDemo"; // 未使用でも将来用に残す
 import licensesMarkdown from "./docs/licenses.md?raw"; // ライセンス文面（Markdown）の生文字列を取り込む
 import { marked } from "marked"; // MarkdownをHTMLに変換
-import { saveBlob } from "./utils/saveBlob"; // 拡張子/MIME整合の保存ユーティリティ
+// import { saveBlob } from "./utils/saveBlob"; // ← 使わずに直接ダウンロード名を指定する
 
 // URLハッシュからパラメータを取得（#key=value&...）
 function parseHashParams(): Record<string, string> {
@@ -164,6 +164,37 @@ const App: React.FC = () => {
   const blobSizeLabel =
     generatedVideoBlob ? `${generatedVideoBlob.size.toLocaleString()} bytes` : null;
 
+  // **拡張子・MIMEの確定**（ここを唯一の真実にする）
+  const effectiveMime = (generatedVideoMimeType || generatedVideoBlob?.type || "").toLowerCase();
+  const suggestedName =
+    effectiveMime.startsWith("video/mp4")
+      ? "parallax_video.mp4"
+      : effectiveMime.startsWith("video/webm")
+      ? "parallax_video.webm"
+      : "parallax_video.bin";
+
+  // Safari 判定（プレビュー注意喚起用）
+  const isSafari = useMemo(
+    () => /^((?!chrome|android).)*safari/i.test(navigator.userAgent),
+    [],
+  );
+
+  // **ダウンロード実処理**：Android ダウンロードマネージャに正しい名前を渡す
+  const handleDownload = useCallback(() => {
+    if (!generatedVideoBlob) return;
+    const url = URL.createObjectURL(generatedVideoBlob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = suggestedName; // ← 完成ファイル名を直接指定（拡張子をOS任せにしない）
+    // 一部ブラウザで type を明示しておくと挙動が安定するケースあり（必須ではない）
+    (a as any).type = effectiveMime || undefined;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    // revokeはタスクキューで遅延させると安全
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  }, [generatedVideoBlob, suggestedName, effectiveMime]);
+
   return (
     <div style={{ maxWidth: 720, margin: "40px auto", fontFamily: "system-ui" }}>
       {(() => {
@@ -286,7 +317,8 @@ const App: React.FC = () => {
               >
                 <source
                   src={videoObjectUrl}
-                  type={generatedVideoMimeType || generatedVideoBlob.type || "video/webm"}
+                  // プレビューも実MIMEをそのまま指定
+                  type={effectiveMime || "video/webm"}
                 />
                 ブラウザが動画の再生に対応していません。
               </video>
@@ -294,8 +326,17 @@ const App: React.FC = () => {
               {/* 生成物の可視化（検証しやすくする） */}
               <div style={{ marginTop: 6, fontSize: 12, color: "#666" }}>
                 size: <code>{blobSizeLabel}</code> / MIME:{" "}
-                <code>{generatedVideoMimeType || generatedVideoBlob.type || "(unknown)"}</code>
+                <code>{effectiveMime || "(unknown)"}</code> / filename:{" "}
+                <code>{suggestedName}</code>
               </div>
+
+              {/* SafariはWebM再生が不可のため注意を出す */}
+              {isSafari && effectiveMime.startsWith("video/webm") && (
+                <div style={{ marginTop: 6, fontSize: 12, color: "#b55" }}>
+                  Safari は WebM 再生に対応していません。プレビューできない場合があります。<br />
+                  ダウンロード後、対応プレイヤーで再生するか、<code>localStorage.FORCE_MIME=mp4</code> を設定して MP4 を優先してください。
+                </div>
+              )}
 
               {/* フォールバック導線：iOS/Safari 等で download 属性が効かない場合 */}
               <div style={{ marginTop: 6 }}>
@@ -311,13 +352,10 @@ const App: React.FC = () => {
             </div>
           )}
 
-          {/* ダウンロード：saveBlobでMIMEと拡張子を一致させる */}
+          {/* ダウンロード：MIME→拡張子を **UI側で** 確定して保存 */}
           {generatedVideoBlob && (
             <button
-              onClick={() => {
-                // base名は "parallax_video" で固定。拡張子は saveBlob が blob.type から決定。
-                saveBlob(generatedVideoBlob, "parallax_video");
-              }}
+              onClick={handleDownload}
               style={{
                 padding: "10px 16px",
                 borderRadius: 8,
@@ -696,7 +734,7 @@ const CameraModal: React.FC<{
               zIndex: 9999,
               padding: "20px 30px",
               fontSize: "24px",
-              background: ready ? "blue" : "gray", // ready状態もわかるように
+              background: ready ? "blue" : "gray",
               color: "white",
               border: "2px solid white",
               borderRadius: 12,
