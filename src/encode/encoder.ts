@@ -423,30 +423,31 @@ export async function encodeVideoWithMeta(
       const blob1 = await encodeWithMediaRecorder(framesSafe, fps, primary);
       console.log("[Encode] MediaRecorder-1 type/size:", blob1.type, blob1.size);
 
-      if (await needsRemuxOrReencode(blob1)) {
+      // ★修正点：サイズ閾値でも即フォールバック
+      if (blob1.size < MIN_VALID_SIZE || await needsRemuxOrReencode(blob1)) {
         console.warn("[Encode] MR-1 output looks fragmented/too small → ffmpeg fix…");
         const fixed = await fixWithFFmpeg(blob1, fps);
         return { blob: fixed, filename: "output.mp4", mime: "video/mp4" };
       }
       if (await isPlayableOnThisBrowser(blob1)) {
-        const mime1 = (blob1.type || primary) as Mime;
+        const mime1 = normalizeMimeFromBlob(blob1, primary);
         const name1 = mime1 === "video/mp4" ? "output.mp4" : "output.webm";
-        return { blob: blob1, filename: name1, mime: mime1 };
+        return { blob: setBlobType(blob1, mime1), filename: name1, mime: mime1 };
       }
 
       console.warn("Playback probe failed. Retrying with alternate MediaRecorder settings…");
       const blob2 = await encodeWithMediaRecorder(framesSafe, fps, secondary);
       console.log("[Encode] MediaRecorder-2 type/size:", blob2.type, blob2.size);
 
-      if (await needsRemuxOrReencode(blob2)) {
+      if (blob2.size < MIN_VALID_SIZE || await needsRemuxOrReencode(blob2)) {
         console.warn("[Encode] MR-2 output looks fragmented/too small → ffmpeg fix…");
         const fixed = await fixWithFFmpeg(blob2, fps);
         return { blob: fixed, filename: "output.mp4", mime: "video/mp4" };
       }
       if (await isPlayableOnThisBrowser(blob2)) {
-        const mime2 = (blob2.type || secondary) as Mime;
+        const mime2 = normalizeMimeFromBlob(blob2, secondary);
         const name2 = mime2 === "video/mp4" ? "output.mp4" : "output.webm";
-        return { blob: blob2, filename: name2, mime: mime2 };
+        return { blob: setBlobType(blob2, mime2), filename: name2, mime: mime2 };
       }
     } catch (e1) {
       console.warn("MediaRecorder path failed", e1);
@@ -466,8 +467,9 @@ export async function encodeVideoWithMeta(
     const tryBlob = await safeBestEffortMedia(framesSafe, fps);
     const sniffed = await sniffContainerMime(tryBlob);
     const mime = (sniffed || tryBlob.type || getPreferredMimeType()) as Mime;
-    const name = mime === "video/mp4" ? "output.mp4" : "output.webm";
-    return { blob: setBlobType(tryBlob, mime), filename: name, mime };
+    const normalized = normalizeMimeString(mime);
+    const name = normalized === "video/mp4" ? "output.mp4" : "output.webm";
+    return { blob: setBlobType(tryBlob, normalized), filename: name, mime: normalized };
   }
 }
 
@@ -508,10 +510,11 @@ async function sniffContainerMime(blob: Blob): Promise<Mime | null> {
 }
 
 // Blob のペイロードはそのままに MIME だけ付け替える
-function setBlobType(src: Blob, mime: string): Blob {
+function setBlobType(src: Blob, mime: Mime): Blob {
   return new Blob([src], { type: mime });
 }
 
+/* ---- ここから MediaRecorder を使った描画→記録 ---- */
 async function encodeWithMediaRecorder(
   frames: AnyFrame[],
   fps: number,
@@ -561,19 +564,23 @@ async function encodeWithMediaRecorder(
     };
     recorder.onstop = async () => {
       // recorder/options/chunk type から推定
-      const guessed =
+      const guessedRaw =
         (chunkType && chunkType.split(";")[0]) ||
         ((recorder as any).mimeType?.split?.(";")?.[0]) ||
         ((options as any).mimeType?.split?.(";")?.[0]) ||
         target;
 
-      let out = new Blob(chunks, { type: guessed });
+      let out = new Blob(chunks, { type: guessedRaw });
 
       // シグネチャで実コンテナを最終確認して MIME を補正
       const sniffed = await sniffContainerMime(out);
-      if (sniffed && !guessed.startsWith(sniffed)) {
-        console.warn(`[Encode] MIME corrected by signature: ${guessed} → ${sniffed}`);
-        out = setBlobType(out, sniffed);
+      const normalized = sniffed ?? normalizeMimeString(guessedRaw as Mime);
+      if (!guessedRaw.startsWith(normalized)) {
+        console.warn(`[Encode] MIME corrected by signature: ${guessedRaw} → ${normalized}`);
+        out = setBlobType(out, normalized);
+      } else {
+        // 念のため完全に正規化
+        out = setBlobType(out, normalizeMimeString(guessedRaw as Mime));
       }
 
       try {
@@ -834,4 +841,23 @@ function detectSize(src: any): { width: number; height: number } {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+/* ---------------- 正規化ユーティリティ ---------------- */
+
+// codecs 付き Blob.type や不明確な type を 'video/mp4' / 'video/webm' に正規化
+function normalizeMimeString(m: string | Mime): Mime {
+  const s = (m || "").toLowerCase();
+  if (s.includes("mp4") || s.includes("isom") || s.includes("mp42")) return "video/mp4";
+  if (s.includes("webm") || s.includes("matroska")) return "video/webm";
+  // 判別不能→既定戦略
+  return getPreferredMimeType();
+}
+
+function normalizeMimeFromBlob(blob: Blob, fallback: Mime): Mime {
+  const t = (blob.type || "").toLowerCase();
+  if (t) return normalizeMimeString(t as Mime);
+  // Blob.type が空の UA ではシグネチャ参照
+  // （呼び出し側で sniffContainerMime を呼んでいない場合の保険）
+  return fallback;
 }
