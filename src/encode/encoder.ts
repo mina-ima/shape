@@ -37,6 +37,10 @@ function isSafari(): boolean {
   return isSafariUA || isIOS();
 }
 
+function isAndroid(): boolean {
+  return /Android/i.test(navigator.userAgent);
+}
+
 function canCaptureStream(): boolean {
   const htmlCanvasProto = (HTMLCanvasElement as any)?.prototype;
   const offscreenProto = (globalThis as any).OffscreenCanvas?.prototype;
@@ -46,6 +50,7 @@ function canCaptureStream(): boolean {
   );
 }
 
+// 実機の再生可否で優先MIMEを決定
 function canPlay(mime: Mime): boolean {
   const v = document.createElement('video');
   const candidates =
@@ -321,8 +326,11 @@ export async function encodeVideoWithMeta(
   const primary: Mime = preferredMime ?? getPreferredMimeType();
   const secondary: Mime = altPreferred(primary);
 
-  // 1) MediaRecorder 優先（強い再生プローブ）
-  if (typeof (globalThis as any).MediaRecorder === 'function' && canCaptureStream()) {
+  // ★ Android は MediaRecorder が不安定なので スキップして ffmpeg へ
+  const shouldSkipMediaRecorder = isAndroid();
+
+  // 1) MediaRecorder 優先（ただし Android はスキップ）
+  if (!shouldSkipMediaRecorder && typeof (globalThis as any).MediaRecorder === 'function' && canCaptureStream()) {
     try {
       const blob1 = await encodeWithMediaRecorder(frames, fps, primary);
       console.log('[Encode] MediaRecorder-1 type/size:', blob1.type, blob1.size);
@@ -343,19 +351,20 @@ export async function encodeVideoWithMeta(
     } catch (e1) {
       console.warn('MediaRecorder path failed', e1);
     }
+  } else if (shouldSkipMediaRecorder) {
+    console.log('MediaRecorder skipped on Android; using ffmpeg.wasm.');
   } else {
     console.log('MediaRecorder skipped: captureStream() not supported or MediaRecorder missing.');
   }
 
-  // 2) ffmpeg.wasm（mp4固定で確実に再生可能化）。失敗時は最後に MediaRecorder の生 Blob を返す。
+  // 2) ffmpeg.wasm（mp4固定で確実に再生可能化）
   try {
     const mp4 = await encodeWithFFmpeg(frames, fps, 'video/mp4');
     console.log('[Encode] ffmpeg mp4 type/size:', mp4.type, mp4.size);
     return { blob: mp4, filename: 'output.mp4', mime: 'video/mp4' };
   } catch (e) {
     console.warn('ffmpeg.wasm unavailable or failed:', e);
-    // どうしても ffmpeg が使えない環境向けの最終フォールバック：
-    // 最初の MediaRecorder で得た blob があればそれを返す（未再生でもダウンロードは可能にする）
+    // どうしても ffmpeg が使えない環境向けの最終フォールバック
     const tryBlob = await safeBestEffortMedia(frames, fps);
     const mime = (tryBlob.type || getPreferredMimeType()) as Mime;
     const name = mime === 'video/mp4' ? 'output.mp4' : 'output.webm';
@@ -429,8 +438,8 @@ async function encodeWithMediaRecorder(
     await sleep(frameInterval);
   }
 
-  // Safari 短尺で再生不能 → 最低尺を確保
-  const minMs = Math.max(700, (frames.length / fps) * 1000);
+  // 短尺で再生不能対策：最低 1.5 秒の尺を確保
+  const minMs = Math.max(1500, (frames.length / fps) * 1000 + 200);
   const elapsed = performance.now() - start;
   if (elapsed < minMs) await sleep(minMs - elapsed);
 
@@ -460,7 +469,6 @@ async function isPlayableOnThisBrowser(blob: Blob, timeoutMs = 5000): Promise<bo
         v.pause();
         URL.revokeObjectURL(url);
       }
-      v.onloadedmetadata = () => {};
       v.oncanplay = async () => {
         try { await v.play(); } catch { cleanup(); resolve(false); }
       };
@@ -480,18 +488,18 @@ async function isPlayableOnThisBrowser(blob: Blob, timeoutMs = 5000): Promise<bo
   }
 }
 
-/* ---- 最終フォールバック用（再生不可でも保存可能な Blob を作る） ---- */
+/* ---- 最終フォールバック（保存だけは可能に） ---- */
 async function safeBestEffortMedia(frames: AnyFrame[], fps: number): Promise<Blob> {
   try {
     const b = await encodeWithMediaRecorder(frames, fps, getPreferredMimeType());
     if (b && b.size > 0) return b;
   } catch {}
-  // ダミーの黒1秒（保存できることを最優先に）
+  // ダミーの黒1秒（保存できることを最優先）
   const c = document.createElement('canvas');
   c.width = 16; c.height = 16;
   const ctx = c.getContext('2d')!;
   ctx.fillStyle = '#000'; ctx.fillRect(0, 0, 16, 16);
-  const png = await new Promise<Blob>((res) => c.toBlob((b) => res(b!), 'image/png') );
+  const png = await new Promise<Blob>((res) => c.toBlob((b) => res(b!), 'image/png'));
   return new Blob([png], { type: 'application/octet-stream' });
 }
 
@@ -507,7 +515,7 @@ async function encodeWithFFmpeg(
 
   const ffmpeg = createFFmpeg({
     log: false,
-    corePath: '/ffmpeg/ffmpeg-core.js', // public/ffmpeg 配下に配置想定
+    corePath: '/ffmpeg/ffmpeg-core.js', // public/ffmpeg 配下に配置済み
   });
   if (!ffmpeg.isLoaded()) await ffmpeg.load();
 
@@ -536,8 +544,7 @@ async function encodeWithFFmpeg(
   } catch {}
 
   const mime = target === 'video/webm' ? 'video/webm' : 'video/mp4';
-  // ★ 重要：data.buffer ではなく data（長さに一致）を渡す
-  return new Blob([data], { type: mime });
+  return new Blob([data], { type: mime }); // data.buffer ではなく data を渡す
 }
 
 /* ---------------- 画像→PNG バイト列 ---------------- */
