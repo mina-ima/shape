@@ -1,18 +1,8 @@
 {
-  "version": 2,
-  "framework": "vite",
-  "buildCommand": "pnpm build",
-  "outputDirectory": "dist",
-  "ignoreCommand": "git diff --quiet HEAD^ HEAD || exit 1",
   "headers": [
     {
-      "source": "/(.*)",
-      "headers": [
-        {
-          "key": "Permissions-Policy",
-          "value": "camera=(self)"
-        }
-      ]
+      "source": "/ffmpeg/(.*)\\.wasm",
+      "headers": [{ "key": "Content-Type", "value": "application/wasm" }]
     }
   ]
 }
