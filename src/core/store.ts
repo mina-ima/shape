@@ -294,6 +294,11 @@ export const useStore = create<AppState>((set, get) => ({
 
         // ---- ここから：エンコードの堅牢化（検証→代替MIME再試行）----
         let meta = await encodeVideoWithMeta(frames, { fps });
+        console.log("[Result] first encode:", {
+          mime: meta?.mime,
+          size: meta?.blob?.size,
+          filename: meta?.filename,
+        });
 
         // 極小/空のBlobは失敗扱い（iOS MediaRecorder の不安定対策）
         const MIN_BYTES = 10_000; // ≒10KB未満は実質再生不能とみなす
@@ -303,6 +308,11 @@ export const useStore = create<AppState>((set, get) => ({
           console.warn("[encode] Blob too small or empty. Retrying with alternate mime...");
           const altMime = meta?.mime === "video/mp4" ? "video/webm" : "video/mp4";
           meta = await encodeVideoWithMeta(frames, { fps, preferredMime: altMime });
+          console.log("[Result] alt encode:", {
+            mime: meta?.mime,
+            size: meta?.blob?.size,
+            filename: meta?.filename,
+          });
         }
 
         if (!meta?.blob || meta.blob.size < MIN_BYTES) {
