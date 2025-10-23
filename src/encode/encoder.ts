@@ -1,22 +1,30 @@
 // src/encode/encoder.ts
 /* eslint-disable no-console */
 
-/* ---------------- ffmpeg ローダ（corePath 自動解決つき） ---------------- */
+/* ---------------- ffmpeg ローダ（corePath 自動解決 + フェイルオーバー） ---------------- */
 // 返す関数は createFFmpeg(opts) を呼べるファクトリ
 async function getCreateFFmpeg(): Promise<null | ((opts: any) => any)> {
-  try {
-    const mod: any = await import("@ffmpeg/ffmpeg");
-    const create = mod?.createFFmpeg ?? mod?.default?.createFFmpeg;
-    if (typeof create !== "function") return null;
-
-    // 既定では corePath を強制しない（CDN 自動解決）。必要なら呼び出し側が opts.corePath 指定。
-    const wrapped = (opts: any = {}) => {
-      return create({ log: false, ...opts });
-    };
-    return wrapped;
-  } catch {
-    return null; // 依存が解決できない環境では ffmpeg をスキップ
+  async function tryLoad(corePath?: string) {
+    try {
+      const mod: any = await import("@ffmpeg/ffmpeg");
+      const create = mod?.createFFmpeg ?? mod?.default?.createFFmpeg;
+      if (typeof create !== "function") return null;
+      const wrapped = (opts: any = {}) => create({ log: false, ...opts, ...(corePath ? { corePath } : {}) });
+      // 軽い実行前チェックだけ
+      return wrapped;
+    } catch {
+      return null;
+    }
   }
+  // 1) 既定（CDN 自動解決）
+  let f = await tryLoad();
+  if (f) return f;
+  // 2) 同一オリジン配置（public/ に置いた場合）
+  f = await tryLoad("/ffmpeg-core.js");
+  if (f) return f;
+  // 3) UNPKG フォールバック
+  f = await tryLoad("https://unpkg.com/@ffmpeg/core@0.12.6/dist/ffmpeg-core.js");
+  return f; // だめなら null
 }
 
 type Mime = "video/webm" | "video/mp4";
@@ -423,9 +431,9 @@ export async function encodeVideoWithMeta(
       const blob1 = await encodeWithMediaRecorder(framesSafe, fps, primary);
       console.log("[Encode] MediaRecorder-1 type/size:", blob1.type, blob1.size);
 
-      // ★修正点：サイズ閾値でも即フォールバック
-      if (blob1.size < MIN_VALID_SIZE || await needsRemuxOrReencode(blob1)) {
-        console.warn("[Encode] MR-1 output looks fragmented/too small → ffmpeg fix…");
+      // ここでシグネチャ判定を即実施
+      if (await needsRemuxOrReencode(blob1)) {
+        console.warn("[Encode] MR-1 output fragmented/too small → ffmpeg fix…");
         const fixed = await fixWithFFmpeg(blob1, fps);
         return { blob: fixed, filename: "output.mp4", mime: "video/mp4" };
       }
@@ -439,8 +447,8 @@ export async function encodeVideoWithMeta(
       const blob2 = await encodeWithMediaRecorder(framesSafe, fps, secondary);
       console.log("[Encode] MediaRecorder-2 type/size:", blob2.type, blob2.size);
 
-      if (blob2.size < MIN_VALID_SIZE || await needsRemuxOrReencode(blob2)) {
-        console.warn("[Encode] MR-2 output looks fragmented/too small → ffmpeg fix…");
+      if (await needsRemuxOrReencode(blob2)) {
+        console.warn("[Encode] MR-2 output fragmented/too small → ffmpeg fix…");
         const fixed = await fixWithFFmpeg(blob2, fps);
         return { blob: fixed, filename: "output.mp4", mime: "video/mp4" };
       }
@@ -493,7 +501,7 @@ function pickMediaRecorderMime(target: Mime): string | undefined {
   return undefined;
 }
 
-/* ---- 追加：コンテナシグネチャ優先の MIME 推定 ---- */
+/* ---- コンテナシグネチャ ---- */
 async function sniffContainerMime(blob: Blob): Promise<Mime | null> {
   if (!blob || blob.size < 12) return null;
   try {
@@ -501,7 +509,6 @@ async function sniffContainerMime(blob: Blob): Promise<Mime | null> {
     // WebM (Matroska/EBML): 0x1A 45 DF A3
     const isWebM = head[0] === 0x1a && head[1] === 0x45 && head[2] === 0xdf && head[3] === 0xa3;
     if (isWebM) return "video/webm";
-
     // ISO-BMFF/MP4: [size(4 bytes)] + 'ftyp'
     const isMP4 = head[4] === 0x66 && head[5] === 0x74 && head[6] === 0x79 && head[7] === 0x70;
     if (isMP4) return "video/mp4";
@@ -579,7 +586,6 @@ async function encodeWithMediaRecorder(
         console.warn(`[Encode] MIME corrected by signature: ${guessedRaw} → ${normalized}`);
         out = setBlobType(out, normalized);
       } else {
-        // 念のため完全に正規化
         out = setBlobType(out, normalizeMimeString(guessedRaw as Mime));
       }
 
@@ -621,9 +627,20 @@ async function encodeWithMediaRecorder(
   return blob;
 }
 
+/* ---- シグネチャで fMP4 を検出（type に依存しない） ---- */
+async function containsBox(blob: Blob, box: string, searchBytes = 2_000_000): Promise<boolean> {
+  const ab = await blob.slice(0, Math.min(searchBytes, blob.size)).arrayBuffer();
+  const s = new TextDecoder("latin1").decode(new Uint8Array(ab));
+  return s.includes(box);
+}
+
 /* ---- 再生可否プローブ ---- */
 async function isPlayableOnThisBrowser(blob: Blob, timeoutMs = 5000): Promise<boolean> {
   if (!blob || blob.size < 20_000) return false;
+
+  // moof があれば多くの端末で `<video src>` 再生不可 → false
+  if (await containsBox(blob, "moof")) return false;
+
   const t = (blob.type || "").toLowerCase();
   if (isSafari() && /webm/.test(t)) return false;
 
@@ -647,16 +664,9 @@ async function isPlayableOnThisBrowser(blob: Blob, timeoutMs = 5000): Promise<bo
         URL.revokeObjectURL(url);
       }
       v.oncanplay = async () => {
-        try {
-          await v.play();
-        } catch {
-          cleanup();
-          resolve(false);
-        }
+        try { await v.play(); } catch { cleanup(); resolve(false); }
       };
-      v.ontimeupdate = () => {
-        if (v.currentTime > 0) progressed = true;
-      };
+      v.ontimeupdate = () => { if (v.currentTime > 0) progressed = true; };
       v.onplaying = () => {
         setTimeout(() => {
           const yes = progressed && v.readyState >= 2 && isFinite(v.duration) && v.duration > 0;
@@ -664,10 +674,7 @@ async function isPlayableOnThisBrowser(blob: Blob, timeoutMs = 5000): Promise<bo
           resolve(yes);
         }, 150);
       };
-      v.onerror = () => {
-        cleanup();
-        resolve(false);
-      };
+      v.onerror = () => { cleanup(); resolve(false); };
     });
 
     return ok;
@@ -676,20 +683,15 @@ async function isPlayableOnThisBrowser(blob: Blob, timeoutMs = 5000): Promise<bo
   }
 }
 
-/* ---- 断片化/再エンコード判定 ---- */
+/* ---- 断片化/再エンコード判定（type 無視・シグネチャ優先） ---- */
 async function needsRemuxOrReencode(blob: Blob): Promise<boolean> {
-  const type = (blob.type || "").toLowerCase();
-  if (/webm/.test(type)) {
-    // webm でも極小は危険
-    return blob.size < MIN_VALID_SIZE;
-  }
-  if (!/mp4/.test(type)) return blob.size < MIN_VALID_SIZE;
-  if (blob.size < MIN_VALID_SIZE) return true;
-
-  // 先頭〜2MBを見て 'moof' があれば fMP4
-  const slice = await blob.slice(0, Math.min(blob.size, 2_000_000)).arrayBuffer();
-  const s = new TextDecoder("latin1").decode(new Uint8Array(slice));
-  return s.includes("moof"); // 断片化（movie fragment）
+  if (!blob || blob.size < MIN_VALID_SIZE) return true;
+  // moof があれば fMP4（断片化） → remux 必須
+  if (await containsBox(blob, "moof")) return true;
+  // WebM の極小なども安全側で
+  const t = (blob.type || "").toLowerCase();
+  if (!/mp4|webm/.test(t)) return false; // type 不明はここでは決めない
+  return false;
 }
 
 /* ---- ffmpeg 修復（remux or 再エンコード） ---- */
@@ -703,38 +705,28 @@ async function fixWithFFmpeg(src: Blob, fps: number): Promise<Blob> {
   const inBuf = new Uint8Array(await src.arrayBuffer());
   ffmpeg.FS("writeFile", "in.bin", inBuf);
 
-  const type = (src.type || "").toLowerCase();
-  let outName = "out.mp4";
+  // moof があれば copy remux、なければ再エンコード判断
+  const hasMoof = await containsBox(src, "moof", 4_000_000);
+  const outName = "out.mp4";
 
-  if (/mp4/.test(type)) {
-    // コピーコーデックで MP4 を progressive に（moov を先頭へ）
+  if (hasMoof) {
     await ffmpeg.run("-i", "in.bin", "-c", "copy", "-movflags", "+faststart", outName);
   } else {
-    // それ以外は h264 baseline + yuv420p に再エンコード
+    // それ以外は h264 baseline + yuv420p に再エンコード（互換重視）
     await ffmpeg.run(
-      "-r",
-      String(fps),
-      "-i",
-      "in.bin",
-      "-c:v",
-      "libx264",
-      "-profile:v",
-      "baseline",
-      "-level",
-      "3.1",
-      "-pix_fmt",
-      "yuv420p",
-      "-movflags",
-      "+faststart",
+      "-r", String(fps),
+      "-i", "in.bin",
+      "-c:v", "libx264",
+      "-profile:v", "baseline",
+      "-level", "3.1",
+      "-pix_fmt", "yuv420p",
+      "-movflags", "+faststart",
       outName,
     );
   }
 
   const out = ffmpeg.FS("readFile", outName);
-  try {
-    ffmpeg.FS("unlink", "in.bin");
-    ffmpeg.FS("unlink", outName);
-  } catch {}
+  try { ffmpeg.FS("unlink", "in.bin"); ffmpeg.FS("unlink", outName"); } catch {}
   return new Blob([out], { type: "video/mp4" });
 }
 
@@ -744,8 +736,6 @@ async function safeBestEffortMedia(frames: AnyFrame[], fps: number): Promise<Blo
     const b = await encodeWithMediaRecorder(frames, fps, getPreferredMimeType());
     if (b && b.size > 0) return b;
   } catch {}
-  // ✅ happy-dom では toDataURL()/toBlob 未実装のため使わない
-  // 「保存できる最小の Blob」を返す
   return new Blob([new Uint8Array([0])], { type: "application/octet-stream" });
 }
 
@@ -772,40 +762,27 @@ async function encodeWithFFmpeg(frames: AnyFrame[], fps: number, target: Mime): 
   const args =
     target === "video/webm"
       ? [
-          "-framerate",
-          String(fps),
-          "-i",
-          "frame_%05d.png",
-          "-c:v",
-          "libvpx-vp8",
-          "-b:v",
-          "2M",
-          "-pix_fmt",
-          "yuv420p",
+          "-framerate", String(fps),
+          "-i", "frame_%05d.png",
+          "-c:v", "libvpx-vp8",
+          "-b:v", "2M",
+          "-pix_fmt", "yuv420p",
           out,
         ]
       : [
-          "-framerate",
-          String(fps),
-          "-i",
-          "frame_%05d.png",
-          "-c:v",
-          "libx264",
-          "-profile:v",
-          "baseline",
-          "-level",
-          "3.1",
-          "-b:v",
-          "2M",
-          "-pix_fmt",
-          "yuv420p",
-          "-movflags",
-          "+faststart",
+          "-framerate", String(fps),
+          "-i", "frame_%05d.png",
+          "-c:v", "libx264",
+          "-profile:v", "baseline",
+          "-level", "3.1",
+          "-b:v", "2M",
+          "-pix_fmt", "yuv420p",
+          "-movflags", "+faststart",
           out,
         ];
 
   await ffmpeg.run(...args);
-  const data = ffmpeg.FS("readFile", out); // Uint8Array
+  const data = ffmpeg.FS("readFile", out);
 
   try {
     for (let i = 0; i < frames.length; i++) ffmpeg.FS("unlink", `frame_${String(i).padStart(5, "0")}.png`);
@@ -850,14 +827,11 @@ function normalizeMimeString(m: string | Mime): Mime {
   const s = (m || "").toLowerCase();
   if (s.includes("mp4") || s.includes("isom") || s.includes("mp42")) return "video/mp4";
   if (s.includes("webm") || s.includes("matroska")) return "video/webm";
-  // 判別不能→既定戦略
   return getPreferredMimeType();
 }
 
 function normalizeMimeFromBlob(blob: Blob, fallback: Mime): Mime {
   const t = (blob.type || "").toLowerCase();
   if (t) return normalizeMimeString(t as Mime);
-  // Blob.type が空の UA ではシグネチャ参照
-  // （呼び出し側で sniffContainerMime を呼んでいない場合の保険）
   return fallback;
 }
