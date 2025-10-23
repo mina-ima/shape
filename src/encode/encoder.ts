@@ -2,11 +2,19 @@
 /* eslint-disable no-console */
 
 /* ---------------- ffmpeg ローダ（無ければ null を返す） ---------------- */
-async function getCreateFFmpeg(): Promise<null | ((opts: any) => any)> {
+// createFFmpeg の呼び出しにデフォルト { worker:false, corePath:'/ffmpeg/ffmpeg-core.js' } を注入する
+async function getCreateFFmpeg(): Promise<null | ((opts?: any) => any)> {
   try {
     const mod: any = await import('@ffmpeg/ffmpeg');
     const create = mod?.createFFmpeg ?? mod?.default?.createFFmpeg;
-    return typeof create === 'function' ? create : null;
+    if (typeof create !== 'function') return null;
+
+    // ラッパ：呼び出し側が何も渡さなくても worker 無効 & 同一オリジンの corePath を利用
+    return (opts: any = {}) => {
+      const merged: any = { log: false, worker: false, ...opts };
+      if (!('corePath' in merged)) merged.corePath = '/ffmpeg/ffmpeg-core.js';
+      return create(merged);
+    };
   } catch {
     return null; // 依存が解決できない環境では ffmpeg をスキップ
   }
@@ -436,10 +444,8 @@ async function encodeWithFFmpeg(
   const createFFmpeg = await getCreateFFmpeg();
   if (!createFFmpeg) throw new Error('ffmpeg-unavailable');
 
-  const ffmpeg = createFFmpeg({
-    log: false,
-    corePath: '/ffmpeg/ffmpeg-core.js',
-  });
+  // ラッパが既定で { worker:false, corePath:'/ffmpeg/ffmpeg-core.js' } を供給
+  const ffmpeg = createFFmpeg();
   if (!ffmpeg.isLoaded()) await ffmpeg.load();
 
   const firstDrawable = await toDrawable(frames[0] as any, { width: 720, height: 1280 });
