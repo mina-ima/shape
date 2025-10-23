@@ -130,3 +130,4 @@ dist
 .DS_Store
 .gemini/
 .DS_Store
+.vercel
