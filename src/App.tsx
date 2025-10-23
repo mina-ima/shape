@@ -4,6 +4,7 @@ import { useStore, MAX_RETRIES } from "./core/store";
 import SegmentationDemo from "./ui/SegmentationDemo"; // 未使用でも将来用に残す
 import licensesMarkdown from "./docs/licenses.md?raw"; // ライセンス文面（Markdown）の生文字列を取り込む
 import { marked } from "marked"; // MarkdownをHTMLに変換
+// import { saveBlob } from "./utils/saveBlob"; // ← 使わずに直接ダウンロード名を指定する
 
 // URLハッシュからパラメータを取得（#key=value&...）
 function parseHashParams(): Record<string, string> {
@@ -88,8 +89,6 @@ const App: React.FC = () => {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
           facingMode: { ideal: "environment" },
-          width: { ideal: 1920 },
-          height: { ideal: 1080 },
         },
         audio: false,
       });
@@ -162,6 +161,40 @@ const App: React.FC = () => {
     };
   }, [videoObjectUrl]);
 
+  const blobSizeLabel =
+    generatedVideoBlob ? `${generatedVideoBlob.size.toLocaleString()} bytes` : null;
+
+  // **拡張子・MIMEの確定**（ここを唯一の真実にする）
+  const effectiveMime = (generatedVideoMimeType || generatedVideoBlob?.type || "").toLowerCase();
+  const suggestedName =
+    effectiveMime.startsWith("video/mp4")
+      ? "parallax_video.mp4"
+      : effectiveMime.startsWith("video/webm")
+      ? "parallax_video.webm"
+      : "parallax_video.bin";
+
+  // Safari 判定（プレビュー注意喚起用）
+  const isSafari = useMemo(
+    () => /^((?!chrome|android).)*safari/i.test(navigator.userAgent),
+    [],
+  );
+
+  // **ダウンロード実処理**：Android ダウンロードマネージャに正しい名前を渡す
+  const handleDownload = useCallback(() => {
+    if (!generatedVideoBlob) return;
+    const url = URL.createObjectURL(generatedVideoBlob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = suggestedName; // ← 完成ファイル名を直接指定（拡張子をOS任せにしない）
+    // 一部ブラウザで type を明示しておくと挙動が安定するケースあり（必須ではない）
+    (a as any).type = effectiveMime || undefined;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    // revokeはタスクキューで遅延させると安全
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  }, [generatedVideoBlob, suggestedName, effectiveMime]);
+
   return (
     <div style={{ maxWidth: 720, margin: "40px auto", fontFamily: "system-ui" }}>
       {(() => {
@@ -185,7 +218,7 @@ const App: React.FC = () => {
           )}
         </div>
 
-        {/* 選択された画像を表示するUIを追加 */}
+        {/* 選択された画像を表示 */}
         {inputImage && (
           <div style={{ marginTop: 16, marginBottom: 16 }}>
             <h3>選択された画像:</h3>
@@ -244,7 +277,7 @@ const App: React.FC = () => {
         {isProcessingUI ? "処理中..." : "選択"}
       </button>
 
-      {/* processing 中の補助表示（テストで期待） */}
+      {/* processing 中の補助表示 */}
       {isProcessingUI && (
         <div style={{ marginTop: 16 }}>
           <div aria-label="loading" data-testid="loading-cloud" style={{ display: "inline-block" }}>
@@ -268,12 +301,12 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* 成功時の UI（処理中ヒントが下りてから表示） */}
+      {/* 成功時の UI */}
       {!isProcessingUI && status === "success" && (
         <div style={{ marginTop: 16 }}>
           <h3>成功!</h3>
 
-          {/* ▼ ここで動画をインライン再生 */}
+          {/* ▼ 動画プレビュー */}
           {generatedVideoBlob && videoObjectUrl && (
             <div style={{ margin: "12px 0" }}>
               <video
@@ -284,40 +317,45 @@ const App: React.FC = () => {
               >
                 <source
                   src={videoObjectUrl}
-                  type={generatedVideoMimeType || generatedVideoBlob.type || "video/webm"}
+                  // プレビューも実MIMEをそのまま指定
+                  type={effectiveMime || "video/webm"}
                 />
                 ブラウザが動画の再生に対応していません。
               </video>
+
+              {/* 生成物の可視化（検証しやすくする） */}
               <div style={{ marginTop: 6, fontSize: 12, color: "#666" }}>
-                MIME:{" "}
-                <code>{generatedVideoMimeType || generatedVideoBlob.type || "(unknown)"}</code>
+                size: <code>{blobSizeLabel}</code> / MIME:{" "}
+                <code>{effectiveMime || "(unknown)"}</code> / filename:{" "}
+                <code>{suggestedName}</code>
+              </div>
+
+              {/* SafariはWebM再生が不可のため注意を出す */}
+              {isSafari && effectiveMime.startsWith("video/webm") && (
+                <div style={{ marginTop: 6, fontSize: 12, color: "#b55" }}>
+                  Safari は WebM 再生に対応していません。プレビューできない場合があります。<br />
+                  ダウンロード後、対応プレイヤーで再生するか、<code>localStorage.FORCE_MIME=mp4</code> を設定して MP4 を優先してください。
+                </div>
+              )}
+
+              {/* フォールバック導線：iOS/Safari 等で download 属性が効かない場合 */}
+              <div style={{ marginTop: 6 }}>
+                <a
+                  href={videoObjectUrl}
+                  target="_blank"
+                  rel="noopener"
+                  style={{ fontSize: 12, color: "#007bff", textDecoration: "underline" }}
+                >
+                  再生/保存できない場合はこちら（新しいタブで開く）
+                </a>
               </div>
             </div>
           )}
 
-          {/* ダウンロードは別ボタンで残す */}
+          {/* ダウンロード：MIME→拡張子を **UI側で** 確定して保存 */}
           {generatedVideoBlob && (
             <button
-              onClick={() => {
-                const url = URL.createObjectURL(generatedVideoBlob);
-                const a = document.createElement("a");
-                a.href = url;
-                // MIMEタイプに基づいてファイル拡張子を決定
-                let filename = "parallax_video";
-                const mt = generatedVideoMimeType || generatedVideoBlob.type;
-                if (mt === "video/mp4") {
-                  filename += ".mp4";
-                } else if (mt === "video/webm") {
-                  filename += ".webm";
-                } else {
-                  filename += ".bin"; // 不明な場合は汎用的な拡張子
-                }
-                a.download = filename;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                URL.revokeObjectURL(url);
-              }}
+              onClick={handleDownload}
               style={{
                 padding: "10px 16px",
                 borderRadius: 8,
@@ -335,7 +373,7 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* エラー時の UI（処理中ヒントが下りてから表示） */}
+      {/* エラー時の UI */}
       {!isProcessingUI && status === "error" && (
         <div style={{ marginTop: 16 }}>
           <h3>エラー</h3>
@@ -468,8 +506,6 @@ const CameraModal: React.FC<{
           stream = await navigator.mediaDevices.getUserMedia({
             video: {
               facingMode: { ideal: "environment" },
-              width: { ideal: 1920 },
-              height: { ideal: 1080 },
             },
             audio: false,
           });
@@ -698,7 +734,7 @@ const CameraModal: React.FC<{
               zIndex: 9999,
               padding: "20px 30px",
               fontSize: "24px",
-              background: ready ? "blue" : "gray", // ready状態もわかるように
+              background: ready ? "blue" : "gray",
               color: "white",
               border: "2px solid white",
               borderRadius: 12,

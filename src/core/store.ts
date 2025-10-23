@@ -1,6 +1,8 @@
+// src/core/store.ts
 import { create } from "zustand";
 import { runSegmentation } from "../processing";
-import { encodeVideo } from "../encode/encoder";
+// 旧: encodeVideo → 新: encodeVideoWithMeta（Blob, filename, mime を受け取る）
+import { encodeVideoWithMeta } from "../encode/encoder";
 import { imageBitmapToUint8Array, createSolidColorImageBitmap } from "../lib/image";
 import { generateLayers, generateParallaxFrames } from "../compose/parallax";
 import {
@@ -12,6 +14,9 @@ export const MAX_RETRIES = 3;
 
 type Status = "idle" | "processing" | "success" | "error";
 
+// UI バインド用の結果型を追加
+type ResultMeta = { blob: Blob; filename: string; mime: "video/webm" | "video/mp4" };
+
 export type AppState = {
   status: Status;
   error: string | null;
@@ -19,8 +24,13 @@ export type AppState = {
   retryCount: number;
   processingResolution: number;
   unsplashApiKey: string | null;
+
+  /** ▼ 後方互換（既存UI向け） */
   generatedVideoBlob: Blob | null;
   generatedVideoMimeType: string | null;
+
+  /** ▼ 新UI向け：成功時の完全な結果（Blob+filename+mime） */
+  result?: ResultMeta;
 
   setUnsplashApiKey: (key: string | null) => void;
   setProcessingResolution: (res: number) => void;
@@ -165,8 +175,10 @@ export const useStore = create<AppState>((set, get) => ({
   retryCount: 0,
   processingResolution: 720,
   unsplashApiKey: null,
+
   generatedVideoBlob: null,
   generatedVideoMimeType: null,
+  result: undefined,
 
   setUnsplashApiKey: (key) => set({ unsplashApiKey: key }),
 
@@ -184,6 +196,7 @@ export const useStore = create<AppState>((set, get) => ({
       processingResolution: 720,
       generatedVideoBlob: null,
       generatedVideoMimeType: null,
+      result: undefined,
     }),
 
   _setError: (msg) => set({ status: "error", error: msg }),
@@ -268,8 +281,8 @@ export const useStore = create<AppState>((set, get) => ({
         );
 
         // 6) パララックス → 動画エンコード
-        const fps = 30;
-        const duration = 5;
+        const fps = 30;          // ★必要なら store に設定項目を追加可
+        const duration = 5;      // 秒
         const frames = await generateParallaxFrames(
           foreground,
           background,
@@ -279,12 +292,44 @@ export const useStore = create<AppState>((set, get) => ({
           fps,
         );
 
-        const videoBlob = await encodeVideo(frames, fps);
-        set({ generatedVideoBlob: videoBlob, generatedVideoMimeType: videoBlob.type });
+        // ---- ここから：エンコードの堅牢化（検証→代替MIME再試行）----
+        let meta = await encodeVideoWithMeta(frames, { fps });
+        console.log("[Result] first encode:", {
+          mime: meta?.mime,
+          size: meta?.blob?.size,
+          filename: meta?.filename,
+        });
+
+        // 極小/空のBlobは失敗扱い（iOS MediaRecorder の不安定対策）
+        const MIN_BYTES = 10_000; // ≒10KB未満は実質再生不能とみなす
+        const isBlobInvalid = !meta?.blob || meta.blob.size < MIN_BYTES;
+
+        if (isBlobInvalid) {
+          console.warn("[encode] Blob too small or empty. Retrying with alternate mime...");
+          const altMime = meta?.mime === "video/mp4" ? "video/webm" : "video/mp4";
+          meta = await encodeVideoWithMeta(frames, { fps, preferredMime: altMime });
+          console.log("[Result] alt encode:", {
+            mime: meta?.mime,
+            size: meta?.blob?.size,
+            filename: meta?.filename,
+          });
+        }
+
+        if (!meta?.blob || meta.blob.size < MIN_BYTES) {
+          throw new Error("Video encoding failed: empty or too small blob.");
+        }
+
+        // ★ここが重要：UI が参照する state を先にセット → その後 success 遷移
+        set({
+          generatedVideoBlob: meta.blob,
+          generatedVideoMimeType: meta.mime,
+          result: { blob: meta.blob, filename: meta.filename, mime: meta.mime },
+        });
 
         set({ status: "success", error: null, retryCount: attemptNo });
         console.log("Attempt successful.");
         return;
+        // ---- ここまで：エンコード堅牢化 ----
       } catch (err) {
         const message =
           err instanceof CameraPermissionDeniedError
@@ -297,12 +342,12 @@ export const useStore = create<AppState>((set, get) => ({
         console.log("Error caught in attempt:", message);
 
         if (err instanceof CameraPermissionDeniedError) {
-          set({ status: "error", error: message, retryCount: attemptNo });
+          set({ status: "error", error: message, retryCount: attemptNo, result: undefined });
           return;
         }
 
         if (attemptNo >= MAX_RETRIES) {
-          set({ status: "error", error: message, retryCount: MAX_RETRIES });
+          set({ status: "error", error: message, retryCount: MAX_RETRIES, result: undefined });
           console.log("Attempt failed (max retries reached). Status:", get().status);
           return;
         }
@@ -313,6 +358,7 @@ export const useStore = create<AppState>((set, get) => ({
           processingResolution: nextRes,
           error: null,
           status: "processing",
+          result: undefined,
         });
         console.log("Attempt failed (retrying). Status:", get().status);
 

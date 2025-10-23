@@ -13,7 +13,8 @@
     "test": "vitest",
     "test:run": "vitest run",
     "test:ci": "vitest run --reporter=verbose",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "vercel-build": "git fetch --unshallow && git lfs fetch --all && git lfs checkout && vite build"
   },
   "dependencies": {
     "@ffmpeg/ffmpeg": "^0.12.15",

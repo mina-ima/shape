@@ -1,72 +1,32 @@
 // src/segmentation/model.ts
-// 目的：ONNXモデルの事前検証＋フォールバックで、本番のLFSポインタ/404でも落ちないようにする。
+// 目的：ONNXモデルの解決とロードを単純化し、404やLFSポインタを回避する。
+// - 直参照の /models/u2net.onnx を廃止
+// - 既定は /models/u2netp.onnx（resolveU2NetModelUrl 経由）
+// - 公開APIは従来どおり：loadOnnxModel / runOnnxInference / getInputInfo / resolveHWFromMeta
+
 import { InferenceSession, Tensor } from "onnxruntime-web";
+import { resolveU2NetModelUrl } from "@/models/loadU2Net"; // パスエイリアスが無ければ相対に変更
 
 // 単純キャッシュ付きのセッション。テスト/実機で共有。
 let _session: InferenceSession | null = null;
 
 /**
- * モデルURLが有効かを判定する軽量チェック
- * - HTTP 200 か
- * - サイズが十分か（1KB未満はポインタ/エラーページ疑い）
- * - 先頭テキストが HTML/LFSポインタでないか
- */
-async function isValidOnnx(url: string): Promise<boolean> {
-  try {
-    const res = await fetch(url, { method: "GET" });
-    if (!res.ok) return false;
-
-    const buf = await res.arrayBuffer();
-
-    // 小さすぎる場合はポインタ/エラーページの可能性が高い
-    if (buf.byteLength < 1024) return false;
-
-    // 先頭だけ読んでLFSポインタやHTMLを検出
-    const head = new TextDecoder().decode(new Uint8Array(buf.slice(0, 120)));
-    const maybeHtml =
-      head.toLowerCase().includes("<!doctype html") ||
-      head.toLowerCase().includes("<html");
-    const maybeLfs = head.includes("git-lfs.github.com/spec/v1");
-
-    return !(maybeHtml || maybeLfs);
-  } catch {
-    return false;
-  }
-}
-
-/**
  * モデルをロードして InferenceSession を返す。
- * - まず primary(/models/u2net.onnx) を検証、NGなら fallback(/models/u2netp.onnx)
- * - modelPath が明示されたらそれを最優先で検証
- * - どれもダメな場合は primary でエラーを出して原因が見えるようにする
+ * - modelPath が明示されていればそれを使用
+ * - 未指定なら resolveU2NetModelUrl('u2netp', '/models') で解決
  */
 export async function loadOnnxModel(modelPath?: string): Promise<InferenceSession> {
   if (_session) return _session;
 
-  const primary = modelPath ?? "/models/u2net.onnx";
-  const fallback = "/models/u2netp.onnx";
+  const selected =
+    modelPath ?? (await resolveU2NetModelUrl("u2netp", "/models"));
 
-  const candidates = modelPath ? [modelPath, primary, fallback] : [primary, fallback];
+  console.log("[Model] Using ONNX:", selected);
 
-  let selected: string | null = null;
-  for (const u of candidates) {
-    if (await isValidOnnx(u)) {
-      selected = u;
-      break;
-    }
-  }
-
-  if (!selected) {
-    // すべてNG → あえて primary で失敗して意味のあるエラーを出す
-    selected = primary;
-    console.error("[Model] No valid ONNX found. Tried:", candidates);
-  } else {
-    console.log("[Model] Using ONNX:", selected);
-  }
-
-  // 実環境での安定化用オプション（モック側は無視されてもOK）
+  // 実環境での安定化用オプション
   _session = await InferenceSession.create(selected, {
     executionProviders: ["wasm"],
+    graphOptimizationLevel: "all",
   } as any);
 
   return _session;
@@ -174,4 +134,3 @@ export async function runOnnxInference(input: Tensor): Promise<Tensor> {
   for (let i = 0; i < data.length; i++) data[i] = (i % w) / Math.max(1, w - 1);
   return new Tensor("float32", data, [1, 1, h, w]);
 }
-

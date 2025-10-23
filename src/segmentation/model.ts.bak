@@ -1,19 +1,25 @@
 // src/segmentation/model.ts
 import * as ort from "onnxruntime-web";
+import { resolveU2NetModelUrl } from "@/models/loadU2Net"; // パスエイリアスが無い場合は相対パスに変更
 
 let session: ort.InferenceSession | undefined;
 
 /**
  * ONNX モデルを読み込み、共有セッションを初期化します。
  * 既に初期化済みなら同じセッションを返します。
+ * - modelPath 未指定時は /models/u2netp.onnx を自動解決（404回避）
  */
 export async function loadOnnxModel(
-  modelPath: string,
+  modelPath?: string,
   options?: Partial<ort.InferenceSession.SessionOptions> & Record<string, any>
 ): Promise<ort.InferenceSession> {
   if (session) return session;
 
-  session = await ort.InferenceSession.create(modelPath, {
+  // 未指定ならユーティリティで解決（/models/u2netp.onnx）
+  const selected =
+    modelPath ?? (await resolveU2NetModelUrl("u2netp", "/models"));
+
+  session = await ort.InferenceSession.create(selected, {
     executionProviders: ["wasm"],
     graphOptimizationLevel: "all",
     ...(options ?? {}),
@@ -32,10 +38,7 @@ export function resetOnnxSession() {
 /** 内部用：必要ならロードしてセッションを返す */
 async function ensureSession(modelPath?: string): Promise<ort.InferenceSession> {
   if (!session) {
-    if (!modelPath) {
-      throw new Error("ONNX session not loaded. Call loadOnnxModel first.");
-    }
-    await loadOnnxModel(modelPath);
+    await loadOnnxModel(modelPath); // 未指定でも自動解決される
   }
   return session!;
 }
@@ -49,6 +52,7 @@ export async function runOnnxInference(
 ) {
   const s = await ensureSession(opts?.modelPath);
 
+  // feeds を浅いコピーで組み立て（型の明示）
   const feeds: Record<string, ort.Tensor> = {};
   for (const k of Object.keys(inputs)) {
     feeds[k] = inputs[k];

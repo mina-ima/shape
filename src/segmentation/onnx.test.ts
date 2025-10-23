@@ -1,7 +1,7 @@
 /**
  * @vitest-environment happy-dom
  */
-import { vi, describe, it, expect, beforeEach } from "vitest";
+import { vi, describe, it, expect, beforeAll, afterAll } from "vitest";
 import getCV from "@/lib/cv"; // 軽量なテスト用モック
 import { postprocess, initialize, runInference } from "./onnx";
 
@@ -10,6 +10,7 @@ vi.mock("@/lib/opencv-loader", () => ({
   default: getCV,
   loadOpenCV: getCV,
 }));
+
 import { loadOnnxModel, runOnnxInference } from "./model";
 import { postProcessAlphaMask } from "./postprocess";
 
@@ -55,7 +56,7 @@ vi.mock("./model", async () => {
     }),
     getOnnxInputDimensions: vi.fn((_resolution: number) => [512, 512]),
     runOnnxInference: vi.fn(async (input: InstanceType<typeof ort.Tensor>) => {
-      const session = await ort.InferenceSession.create("/models/u2net.onnx", {
+      const session = await ort.InferenceSession.create("/models/u2netp.onnx", {
         executionProviders: ["wasm"],
       });
       await session.run({ "input.1": input });
@@ -71,7 +72,7 @@ vi.mock("./model", async () => {
 });
 
 describe("ONNX Runtime Web Integration", () => {
-  const modelPath = "/models/u2net.onnx";
+  const modelPath = "/models/u2netp.onnx";
   let consoleLogSpy: vi.SpyInstance;
   let TensorCtor: any;
   let ort: any;

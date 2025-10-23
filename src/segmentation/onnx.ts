@@ -1,5 +1,6 @@
 // src/segmentation/onnx.ts
 import * as ort from "onnxruntime-web";
+import { resolveU2NetModelUrl } from "@/models/loadU2Net";
 
 // グローバルに 1 回だけ作るセッション（テストからリセット可能）
 let _session: ort.InferenceSession | null = null;
