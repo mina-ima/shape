@@ -37,10 +37,6 @@ function isSafari(): boolean {
   return isSafariUA || isIOS();
 }
 
-function isAndroid(): boolean {
-  return /Android/i.test(navigator.userAgent);
-}
-
 function canCaptureStream(): boolean {
   const htmlCanvasProto = (HTMLCanvasElement as any)?.prototype;
   const offscreenProto = (globalThis as any).OffscreenCanvas?.prototype;
@@ -326,23 +322,32 @@ export async function encodeVideoWithMeta(
   const primary: Mime = preferredMime ?? getPreferredMimeType();
   const secondary: Mime = altPreferred(primary);
 
-  // ★ Android は MediaRecorder が不安定なので スキップして ffmpeg へ
-  const shouldSkipMediaRecorder = isAndroid();
-
-  // 1) MediaRecorder 優先（ただし Android はスキップ）
-  if (!shouldSkipMediaRecorder && typeof (globalThis as any).MediaRecorder === 'function' && canCaptureStream()) {
+  // 1) MediaRecorder 優先（強い再生プローブ＋MP4断片化の自動検出→remux）
+  if (typeof (globalThis as any).MediaRecorder === 'function' && canCaptureStream()) {
     try {
       const blob1 = await encodeWithMediaRecorder(frames, fps, primary);
       console.log('[Encode] MediaRecorder-1 type/size:', blob1.type, blob1.size);
+
+      if (await needsRemuxToProgressiveMp4(blob1)) {
+        console.warn('[Encode] MR output is fragmented MP4 or short. Remuxing to progressive MP4 via ffmpeg…');
+        const mp4 = await remuxToProgressiveMp4(blob1);
+        return { blob: mp4, filename: 'output.mp4', mime: 'video/mp4' };
+      }
       if (await isPlayableOnThisBrowser(blob1)) {
         const mime1 = (blob1.type || primary) as Mime;
         const filename1 = mime1 === 'video/mp4' ? 'output.mp4' : 'output.webm';
         return { blob: blob1, filename: filename1, mime: mime1 };
       }
-      console.warn('Playback probe failed. Retrying with alternate MediaRecorder settings…');
 
+      console.warn('Playback probe failed. Retrying with alternate MediaRecorder settings…');
       const blob2 = await encodeWithMediaRecorder(frames, fps, secondary);
       console.log('[Encode] MediaRecorder-2 type/size:', blob2.type, blob2.size);
+
+      if (await needsRemuxToProgressiveMp4(blob2)) {
+        console.warn('[Encode] MR(alt) output is fragmented MP4 or short. Remuxing…');
+        const mp4 = await remuxToProgressiveMp4(blob2);
+        return { blob: mp4, filename: 'output.mp4', mime: 'video/mp4' };
+      }
       if (await isPlayableOnThisBrowser(blob2)) {
         const mime2 = (blob2.type || secondary) as Mime;
         const filename2 = mime2 === 'video/mp4' ? 'output.mp4' : 'output.webm';
@@ -351,8 +356,6 @@ export async function encodeVideoWithMeta(
     } catch (e1) {
       console.warn('MediaRecorder path failed', e1);
     }
-  } else if (shouldSkipMediaRecorder) {
-    console.log('MediaRecorder skipped on Android; using ffmpeg.wasm.');
   } else {
     console.log('MediaRecorder skipped: captureStream() not supported or MediaRecorder missing.');
   }
@@ -438,8 +441,8 @@ async function encodeWithMediaRecorder(
     await sleep(frameInterval);
   }
 
-  // 短尺で再生不能対策：最低 1.5 秒の尺を確保
-  const minMs = Math.max(1500, (frames.length / fps) * 1000 + 200);
+  // Safari/Android 短尺対策：最低尺を確保
+  const minMs = Math.max(1000, (frames.length / fps) * 1000);
   const elapsed = performance.now() - start;
   if (elapsed < minMs) await sleep(minMs - elapsed);
 
@@ -449,7 +452,7 @@ async function encodeWithMediaRecorder(
 
 /* ---- 再生可否プローブ（強化版） ---- */
 async function isPlayableOnThisBrowser(blob: Blob, timeoutMs = 5000): Promise<boolean> {
-  if (!blob || blob.size < 10_000) return false;
+  if (!blob || blob.size < 20_000) return false;
   const t = (blob.type || '').toLowerCase();
   if (isSafari() && /webm/.test(t)) return false;
 
@@ -475,7 +478,7 @@ async function isPlayableOnThisBrowser(blob: Blob, timeoutMs = 5000): Promise<bo
       v.ontimeupdate = () => { if (v.currentTime > 0) progressed = true; };
       v.onplaying = () => {
         setTimeout(() => {
-          const ok = progressed && v.readyState >= 2;
+          const ok = progressed && v.readyState >= 2 && isFinite(v.duration) && v.duration > 0;
           cleanup(); resolve(ok);
         }, 150);
       };
@@ -488,22 +491,58 @@ async function isPlayableOnThisBrowser(blob: Blob, timeoutMs = 5000): Promise<bo
   }
 }
 
-/* ---- 最終フォールバック（保存だけは可能に） ---- */
+/* ---- MP4 断片化検出 & remux 判定 ---- */
+async function needsRemuxToProgressiveMp4(blob: Blob): Promise<boolean> {
+  const type = (blob.type || '').toLowerCase();
+  if (!/mp4/.test(type)) return false;
+  if (blob.size < 40_000) return true; // 短尺・極小は不安定なのでremux
+  // 先頭〜数MBを見て 'moof' があれば fMP4
+  const slice = await blob.slice(0, Math.min(blob.size, 2_000_000)).arrayBuffer();
+  const s = new TextDecoder('latin1').decode(new Uint8Array(slice));
+  return s.includes('moof'); // 断片化（movie fragment）
+}
+
+/* ---- 最終フォールバック用（再生不可でも保存可能な Blob を作る） ---- */
 async function safeBestEffortMedia(frames: AnyFrame[], fps: number): Promise<Blob> {
   try {
     const b = await encodeWithMediaRecorder(frames, fps, getPreferredMimeType());
     if (b && b.size > 0) return b;
   } catch {}
-  // ダミーの黒1秒（保存できることを最優先）
+  // ダミーの黒フレーム（保存を最優先）
   const c = document.createElement('canvas');
   c.width = 16; c.height = 16;
   const ctx = c.getContext('2d')!;
   ctx.fillStyle = '#000'; ctx.fillRect(0, 0, 16, 16);
-  const png = await new Promise<Blob>((res) => c.toBlob((b) => res(b!), 'image/png'));
+  const png = await new Promise<Blob>((res) => c.toBlob((b) => res(b!), 'image/png') );
   return new Blob([png], { type: 'application/octet-stream' });
 }
 
 /* ---------------- ffmpeg.wasm 実装 ---------------- */
+
+async function remuxToProgressiveMp4(srcMp4: Blob): Promise<Blob> {
+  const createFFmpeg = await getCreateFFmpeg();
+  if (!createFFmpeg) throw new Error('ffmpeg-unavailable');
+
+  const ffmpeg = createFFmpeg({
+    log: false,
+    corePath: '/ffmpeg/ffmpeg-core.js',
+  });
+  if (!ffmpeg.isLoaded()) await ffmpeg.load();
+
+  const inBuf = new Uint8Array(await srcMp4.arrayBuffer());
+  ffmpeg.FS('writeFile', 'in.mp4', inBuf);
+
+  // コピーコーデックで MP4 を progressive に（moov を先頭へ）
+  await ffmpeg.run(
+    '-i', 'in.mp4',
+    '-c', 'copy',
+    '-movflags', '+faststart',
+    'out.mp4'
+  );
+  const out = ffmpeg.FS('readFile', 'out.mp4');
+  try { ffmpeg.FS('unlink', 'in.mp4'); ffmpeg.FS('unlink', 'out.mp4'); } catch {}
+  return new Blob([out], { type: 'video/mp4' });
+}
 
 async function encodeWithFFmpeg(
   frames: AnyFrame[],
@@ -515,7 +554,7 @@ async function encodeWithFFmpeg(
 
   const ffmpeg = createFFmpeg({
     log: false,
-    corePath: '/ffmpeg/ffmpeg-core.js', // public/ffmpeg 配下に配置済み
+    corePath: '/ffmpeg/ffmpeg-core.js', // public/ffmpeg 配下に配置想定
   });
   if (!ffmpeg.isLoaded()) await ffmpeg.load();
 
@@ -544,7 +583,7 @@ async function encodeWithFFmpeg(
   } catch {}
 
   const mime = target === 'video/webm' ? 'video/webm' : 'video/mp4';
-  return new Blob([data], { type: mime }); // data.buffer ではなく data を渡す
+  return new Blob([data], { type: mime });
 }
 
 /* ---------------- 画像→PNG バイト列 ---------------- */
