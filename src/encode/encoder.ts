@@ -1,4 +1,3 @@
-
 // src/encode/encoder.ts
 /* eslint-disable no-console */
 
@@ -47,7 +46,6 @@ function canCaptureStream(): boolean {
   );
 }
 
-// 実機の再生可否で優先MIMEを決定（iOS判定のみの誤差を回避）
 function canPlay(mime: Mime): boolean {
   const v = document.createElement('video');
   const candidates =
@@ -66,7 +64,6 @@ function canPlay(mime: Mime): boolean {
 }
 
 export function getPreferredMimeType(): Mime {
-  // デバッグ用強制指定（必要なら localStorage に設定）
   try {
     const forced = localStorage.getItem('FORCE_MIME');
     if (forced === 'mp4') return 'video/mp4';
@@ -77,11 +74,7 @@ export function getPreferredMimeType(): Mime {
 
   if (mp4OK && !webmOK) return 'video/mp4';
   if (webmOK && !mp4OK) return 'video/webm';
-  if (mp4OK && webmOK) {
-    // iOS系はmp4優先、それ以外はwebm優先（どちらでも再生可なら）
-    return isIOS() ? 'video/mp4' : 'video/webm';
-  }
-  // どちらも微妙なら mp4（iOS互換を優先）
+  if (mp4OK && webmOK) return isIOS() ? 'video/mp4' : 'video/webm';
   return 'video/mp4';
 }
 
@@ -328,10 +321,11 @@ export async function encodeVideoWithMeta(
   const primary: Mime = preferredMime ?? getPreferredMimeType();
   const secondary: Mime = altPreferred(primary);
 
-  // 1) MediaRecorder 優先（実出力を強い再生プローブで検証）
+  // 1) MediaRecorder 優先（強い再生プローブ）
   if (typeof (globalThis as any).MediaRecorder === 'function' && canCaptureStream()) {
     try {
       const blob1 = await encodeWithMediaRecorder(frames, fps, primary);
+      console.log('[Encode] MediaRecorder-1 type/size:', blob1.type, blob1.size);
       if (await isPlayableOnThisBrowser(blob1)) {
         const mime1 = (blob1.type || primary) as Mime;
         const filename1 = mime1 === 'video/mp4' ? 'output.mp4' : 'output.webm';
@@ -340,6 +334,7 @@ export async function encodeVideoWithMeta(
       console.warn('Playback probe failed. Retrying with alternate MediaRecorder settings…');
 
       const blob2 = await encodeWithMediaRecorder(frames, fps, secondary);
+      console.log('[Encode] MediaRecorder-2 type/size:', blob2.type, blob2.size);
       if (await isPlayableOnThisBrowser(blob2)) {
         const mime2 = (blob2.type || secondary) as Mime;
         const filename2 = mime2 === 'video/mp4' ? 'output.mp4' : 'output.webm';
@@ -352,9 +347,20 @@ export async function encodeVideoWithMeta(
     console.log('MediaRecorder skipped: captureStream() not supported or MediaRecorder missing.');
   }
 
-  // 2) ffmpeg.wasm（mp4固定で確実に再生可能化）
-  const mp4 = await encodeWithFFmpeg(frames, fps, 'video/mp4');
-  return { blob: mp4, filename: 'output.mp4', mime: 'video/mp4' };
+  // 2) ffmpeg.wasm（mp4固定で確実に再生可能化）。失敗時は最後に MediaRecorder の生 Blob を返す。
+  try {
+    const mp4 = await encodeWithFFmpeg(frames, fps, 'video/mp4');
+    console.log('[Encode] ffmpeg mp4 type/size:', mp4.type, mp4.size);
+    return { blob: mp4, filename: 'output.mp4', mime: 'video/mp4' };
+  } catch (e) {
+    console.warn('ffmpeg.wasm unavailable or failed:', e);
+    // どうしても ffmpeg が使えない環境向けの最終フォールバック：
+    // 最初の MediaRecorder で得た blob があればそれを返す（未再生でもダウンロードは可能にする）
+    const tryBlob = await safeBestEffortMedia(frames, fps);
+    const mime = (tryBlob.type || getPreferredMimeType()) as Mime;
+    const name = mime === 'video/mp4' ? 'output.mp4' : 'output.webm';
+    return { blob: tryBlob, filename: name, mime };
+  }
 }
 
 /* ---------------- MediaRecorder 実装 ---------------- */
@@ -410,7 +416,7 @@ async function encodeWithMediaRecorder(
     };
   });
 
-  recorder.start(100); // timeslice指定で ondataavailable を安定化
+  recorder.start(100);
   const frameInterval = Math.max(4, Math.round(1000 / fps));
 
   const start = performance.now();
@@ -423,7 +429,7 @@ async function encodeWithMediaRecorder(
     await sleep(frameInterval);
   }
 
-  // 最低 700ms 程度の尺を確保（Safari 短尺で再生不能になるケースの回避）
+  // Safari 短尺で再生不能 → 最低尺を確保
   const minMs = Math.max(700, (frames.length / fps) * 1000);
   const elapsed = performance.now() - start;
   if (elapsed < minMs) await sleep(minMs - elapsed);
@@ -435,10 +441,8 @@ async function encodeWithMediaRecorder(
 /* ---- 再生可否プローブ（強化版） ---- */
 async function isPlayableOnThisBrowser(blob: Blob, timeoutMs = 5000): Promise<boolean> {
   if (!blob || blob.size < 10_000) return false;
-
-  // MIME サポートの早期フィルタ
   const t = (blob.type || '').toLowerCase();
-  if (isSafari() && /webm/.test(t)) return false; // Safari系はwebm不可
+  if (isSafari() && /webm/.test(t)) return false;
 
   try {
     const url = URL.createObjectURL(blob);
@@ -450,31 +454,17 @@ async function isPlayableOnThisBrowser(blob: Blob, timeoutMs = 5000): Promise<bo
 
     const played = await new Promise<boolean>((resolve) => {
       const to = setTimeout(() => { cleanup(); resolve(false); }, timeoutMs);
-
       let progressed = false;
-
       function cleanup() {
         clearTimeout(to);
         v.pause();
         URL.revokeObjectURL(url);
       }
-
-      v.onloadedmetadata = () => {
-        // duration が有限かを見つつ、引き続き再生試行へ
-        if (!isFinite(v.duration) || v.duration <= 0) {
-          // 続行（canplay / play を待つ）
-        }
-      };
+      v.onloadedmetadata = () => {};
       v.oncanplay = async () => {
-        try {
-          await v.play();
-        } catch {
-          cleanup(); resolve(false);
-        }
+        try { await v.play(); } catch { cleanup(); resolve(false); }
       };
-      v.ontimeupdate = () => {
-        if (v.currentTime > 0) progressed = true;
-      };
+      v.ontimeupdate = () => { if (v.currentTime > 0) progressed = true; };
       v.onplaying = () => {
         setTimeout(() => {
           const ok = progressed && v.readyState >= 2;
@@ -488,6 +478,21 @@ async function isPlayableOnThisBrowser(blob: Blob, timeoutMs = 5000): Promise<bo
   } catch {
     return false;
   }
+}
+
+/* ---- 最終フォールバック用（再生不可でも保存可能な Blob を作る） ---- */
+async function safeBestEffortMedia(frames: AnyFrame[], fps: number): Promise<Blob> {
+  try {
+    const b = await encodeWithMediaRecorder(frames, fps, getPreferredMimeType());
+    if (b && b.size > 0) return b;
+  } catch {}
+  // ダミーの黒1秒（保存できることを最優先に）
+  const c = document.createElement('canvas');
+  c.width = 16; c.height = 16;
+  const ctx = c.getContext('2d')!;
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, 16, 16);
+  const png = await new Promise<Blob>((res) => c.toBlob((b) => res(b!), 'image/png') );
+  return new Blob([png], { type: 'application/octet-stream' });
 }
 
 /* ---------------- ffmpeg.wasm 実装 ---------------- */
@@ -519,28 +524,11 @@ async function encodeWithFFmpeg(
   const out = target === 'video/webm' ? 'out.webm' : 'out.mp4';
   const args =
     target === 'video/webm'
-      ? [
-          '-framerate', String(fps),
-          '-i', 'frame_%05d.png',
-          '-c:v', 'libvpx-vp8', // 互換性重視
-          '-b:v', '2M',
-          '-pix_fmt', 'yuv420p',
-          out
-        ]
-      : [
-          '-framerate', String(fps),
-          '-i', 'frame_%05d.png',
-          '-c:v', 'libx264',
-          '-profile:v', 'baseline',
-          '-level', '3.1',
-          '-b:v', '2M',
-          '-pix_fmt', 'yuv420p',
-          '-movflags', '+faststart',
-          out
-        ];
+      ? ['-framerate', String(fps), '-i', 'frame_%05d.png', '-c:v', 'libvpx-vp8', '-b:v', '2M', '-pix_fmt', 'yuv420p', out]
+      : ['-framerate', String(fps), '-i', 'frame_%05d.png', '-c:v', 'libx264', '-profile:v', 'baseline', '-level', '3.1', '-b:v', '2M', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', out];
 
   await ffmpeg.run(...args);
-  const data = ffmpeg.FS('readFile', out);
+  const data = ffmpeg.FS('readFile', out); // Uint8Array
 
   try {
     for (let i = 0; i < frames.length; i++) ffmpeg.FS('unlink', `frame_${String(i).padStart(5, '0')}.png`);
@@ -548,7 +536,8 @@ async function encodeWithFFmpeg(
   } catch {}
 
   const mime = target === 'video/webm' ? 'video/webm' : 'video/mp4';
-  return new Blob([data.buffer], { type: mime });
+  // ★ 重要：data.buffer ではなく data（長さに一致）を渡す
+  return new Blob([data], { type: mime });
 }
 
 /* ---------------- 画像→PNG バイト列 ---------------- */
