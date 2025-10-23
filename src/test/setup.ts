@@ -61,7 +61,7 @@ if (!(globalThis as any).createImageBitmap) {
 const realFetch = globalThis.fetch;
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = typeof input === "string" ? input : input.toString();
-  if (url.includes("/models/u2net.onnx")) {
+  if (url.includes("/models/u2netp.onnx")) {
     const buf = new ArrayBuffer(1024 * 1024);
     return new Response(buf, { status: 200 });
   }

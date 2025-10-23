@@ -5,8 +5,7 @@ import {
   getInputInfo,
   resolveHWFromMeta,
 } from "./segmentation/model";
-
-const DEFAULT_MODEL_PATH = "/models/u2net.onnx"; // 実ファイル名に合わせる
+import { resolveU2NetModelUrl } from "@/models/loadU2Net"; // 追加：モデルURLの解決
 
 /** 画像を HxW(=320等) にリサイズ→RGB(0..1)→NCHW float32 へ詰め替え */
 async function imageToNCHWFloat32(
@@ -14,7 +13,6 @@ async function imageToNCHWFloat32(
   H: number,
   W: number,
 ): Promise<Float32Array> {
-  // オフスクリーン描画
   const canvas = document.createElement("canvas");
   canvas.width = W;
   canvas.height = H;
@@ -24,14 +22,12 @@ async function imageToNCHWFloat32(
 
   // NCHW: [1, 3, H, W]
   const out = new Float32Array(1 * 3 * H * W);
-  // data: [R,G,B,A, R,G,B,A, ...]
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
       const i = (y * W + x) * 4;
       const r = data[i] / 255;
       const g = data[i + 1] / 255;
       const b = data[i + 2] / 255;
-      // NCHWの順（Cが先）
       out[0 * H * W + y * W + x] = r;
       out[1 * H * W + y * W + x] = g;
       out[2 * H * W + y * W + x] = b;
@@ -46,20 +42,18 @@ function maskTensorToImageData(
   H: number,
   W: number,
 ): ImageData {
-  // last two dims を HxW とみなす（合わなければリサイズで合わせる）
   const arr = tensor.data as Float32Array;
-  // 値域を 0..1 に正規化（すでに0..1なら害なし）
-  let min = Infinity,
-    max = -Infinity;
+
+  // 0..1 に正規化（安全のため min-max）
+  let min = Infinity, max = -Infinity;
   for (let i = 0; i < arr.length; i++) {
     const v = arr[i];
     if (v < min) min = v;
     if (v > max) max = v;
   }
   const scale = max > min ? 1 / (max - min) : 1;
-  // U^2-Net 出力はシグモイド後 0..1 のことが多いが、min-max 安全化で吸収
+
   const img = new ImageData(W, H);
-  // 入力サイズが同じ前提で最初の H*W を使う（違う場合は簡易スケール）
   const need = H * W;
   const step = arr.length / need;
   for (let i = 0; i < need; i++) {
@@ -78,13 +72,16 @@ function maskTensorToImageData(
 /** 画像を与えて推論し、マスクImageData(320x320等)を返す */
 export async function runSegmentation(
   image: ImageBitmap | HTMLImageElement,
-  modelPath: string = DEFAULT_MODEL_PATH,
+  modelPath?: string, // 直参照はやめ、未指定なら resolveU2NetModelUrl() で決定
 ): Promise<{
   mask: ImageData;
   inputSize: { h: number; w: number };
   outputName: string;
 }> {
-  const session = await loadOnnxModel(modelPath);
+  // 未指定時は '/models/u2netp.onnx' を解決（将来変更もここで吸収）
+  const resolvedModel = modelPath ?? (await resolveU2NetModelUrl("u2netp", "/models"));
+  const session = await loadOnnxModel(resolvedModel);
+
   const { names, name, dims } = getInputInfo(session);
   console.log("[ORT] inputNames:", names);
   console.log("[ORT] using input name:", name);
@@ -101,7 +98,7 @@ export async function runSegmentation(
   const outputTensor = await runOnnxInference(inputTensor);
 
   // 最初の出力をマスクとみなす
-  const outName = session.outputNames[0]; // outputTensor は単一の Tensor なので、outName は情報としてのみ使用
+  const outName = session.outputNames[0];
   const mask = maskTensorToImageData(outputTensor, h, w);
 
   console.log("[ORT] inference finished successfully.");

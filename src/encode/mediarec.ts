@@ -3,15 +3,20 @@ import cv from "@techstark/opencv-js";
 
 /**
  * MediaRecorder で cv.Mat[] を動画化して Blob を返す。
- * - Canvas.captureStream(fps) を使用
+ * - Canvas.captureStream(fps) を使用（OffscreenCanvas対応）
  * - cv.imshow で 1/FPS ごとに確実に描画
- * - stop 後の dataavailable を await
- * - 極小 Blob は失敗として上位にフォールバックさせる
+ * - timeslice ありで dataavailable を安定化
+ * - 実際の chunks[0].type を返却 MIME に採用（UAが変えるケースに対応）
+ * - 極小 Blob（<64KB）は不正として上位にフォールバック
  */
+
+export type TargetMime = "video/webm" | "video/mp4";
+const MIN_VALID_SIZE = 64 * 1024; // 64KB 未満は破損/短尺とみなす
+
 export async function encodeWithMediaRecorder(
   frames: cv.Mat[],
   fps: number,
-  mimeType: string,
+  target: TargetMime,
 ): Promise<Blob> {
   if (typeof window === "undefined" || typeof (window as any).MediaRecorder !== "function") {
     throw new Error("MediaRecorder is not available.");
@@ -35,22 +40,19 @@ export async function encodeWithMediaRecorder(
   const stream: MediaStream =
     (canvas as any).captureStream?.(fps) ??
     (canvas as HTMLCanvasElement).captureStream?.(fps);
-  if (!stream) {
-    throw new Error("Canvas.captureStream() is not supported.");
-  }
+  if (!stream) throw new Error("Canvas.captureStream() is not supported.");
 
-  // MediaRecorder 準備
-  const options: MediaRecorderOptions = {
-    mimeType,
-    // 低すぎると「音無し・映像ビットほぼゼロ」になりやすい端末があるため、ある程度確保
-    videoBitsPerSecond: 4_000_000,
-  };
+  // MediaRecorder 準備（isTypeSupported で最適候補を選ぶ）
+  const prefer = pickMediaRecorderMime(target);
+  const options: MediaRecorderOptions = prefer
+    ? { mimeType: prefer, videoBitsPerSecond: 4_000_000 }
+    : { videoBitsPerSecond: 4_000_000 };
 
   let recorder: MediaRecorder;
   try {
     recorder = new MediaRecorder(stream, options);
-  } catch (e) {
-    // 一部 UA では mimeType 不一致で例外になる
+  } catch {
+    // 一部 UA は mimeType 不一致で例外 → UA 任せで作り直し
     recorder = new MediaRecorder(stream);
   }
 
@@ -67,7 +69,13 @@ export async function encodeWithMediaRecorder(
     });
     recorder.addEventListener("stop", () => {
       try {
-        const blob = new Blob(chunks, { type: mimeType });
+        // **重要**: UA が実際に吐いた最初のチャンクの type を採用
+        const effectiveType =
+          (chunks[0] as any)?.type ||
+          (recorder as any).mimeType ||
+          (options as any).mimeType ||
+          target;
+        const blob = new Blob(chunks, { type: effectiveType });
         resolve(blob);
       } catch (e) {
         reject(e);
@@ -76,20 +84,21 @@ export async function encodeWithMediaRecorder(
     recorder.addEventListener("error", (e: any) => reject(e?.error ?? e));
   });
 
-  recorder.start(); // timeslice なし: stop 時に dataavailable が 1 回来る挙動に合わせる
+  // timeslice ありで開始（200msごとに dataavailable が出る。mux 安定＆短尺化対策）
+  recorder.start(200);
   await startPromise;
 
-  // 描画: cv.imshow を使う（RGBA→描画を内部で処理してくれる）
+  // 描画: cv.imshow を使う（RGBA→描画を内部で処理）
   const drawFrame = (mat: cv.Mat) => {
-    // OffscreenCanvas/HTMLCanvasElement どちらでも (as any) で渡せば OK
-    (cv as any).imshow(canvas as any, mat);
+    (cv as any).imshow(canvas as any, mat); // Offscreen/HTMLCanvas 両対応
   };
 
-  const frameInterval = 1000 / Math.max(1, fps);
+  const frameInterval = Math.max(4, Math.round(1000 / Math.max(1, fps)));
 
   // 1/FPS ごとに確実に 1 フレームずつ描く
   for (let i = 0; i < frames.length; i++) {
     drawFrame(frames[i]);
+    // eslint-disable-next-line no-await-in-loop
     await wait(frameInterval);
   }
 
@@ -103,12 +112,43 @@ export async function encodeWithMediaRecorder(
   // ストリームをクリーンアップ
   stream.getTracks().forEach((t) => t.stop());
 
-  // 極小（= ヘッダのみ）の検出。小さすぎる場合はフォールバック促進のため失敗にする
-  if (!blob || blob.size < 4096) {
+  // 極小（= ヘッダのみ/断片のみ）の検出。小さすぎる場合はフォールバック促進のため失敗にする
+  if (!blob || blob.size < MIN_VALID_SIZE) {
     throw new Error(`Recorded blob is too small (${blob?.size ?? 0} bytes).`);
   }
 
   return blob;
+}
+
+/* ---------------- ユーティリティ ---------------- */
+
+// UAごとの最適候補（Androidは webm 優先、iOS系で mp4 を含む）
+function pickMediaRecorderMime(target: TargetMime): string | undefined {
+  const MR: any = (window as any).MediaRecorder;
+  if (!MR?.isTypeSupported) return undefined;
+
+  const candidates =
+    target === "video/webm"
+      ? [
+          "video/webm;codecs=vp9,opus", // 互換性が高い順
+          "video/webm;codecs=vp8,opus",
+          "video/webm;codecs=vp8",
+          "video/webm",
+        ]
+      : [
+          // Android では 'video/mp4' 非対応が多いが、iOS/Safari 向けには試す価値あり
+          "video/mp4;codecs=avc1.42E01E",
+          "video/mp4",
+        ];
+
+  for (const c of candidates) {
+    try {
+      if (MR.isTypeSupported(c)) return c;
+    } catch {
+      /* UA 実装差で例外のことがあるため握りつぶす */
+    }
+  }
+  return undefined; // ブラウザ任せ
 }
 
 function wait(ms: number) {
