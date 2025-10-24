@@ -11,7 +11,7 @@ import { resolveU2NetModelUrl } from "@/models/loadU2Net";
 let _ort: any | null = null;
 async function getOrt() {
   if (!_ort) {
-    _ort = await import("onnxruntime-web/dist/ort.bundle.min.mjs");
+    _ort = await import("onnxruntime-web");
     // vite.config.ts で *.wasm をルートへ出している前提
     // 例）viteStaticCopy({ targets: [{ src: 'node_modules/onnxruntime-web/dist/*.wasm', dest: '.' }] })
     if (_ort?.env?.wasm) {
