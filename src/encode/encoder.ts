@@ -46,7 +46,6 @@ export function getPreferredMimeType(): Mime {
   // ギャラリー等の互換性を最優先：iOS/Android は MP4、その他は WebM
   return (isIOS() || isAndroid()) ? 'video/mp4' : 'video/webm';
 }
-
 function altPreferred(mime: Mime): Mime {
   return mime === 'video/webm' ? 'video/mp4' : 'video/webm';
 }
@@ -369,8 +368,11 @@ async function encodeWithFFmpeg(
   } catch {}
 
   const mime = target === 'video/webm' ? 'video/webm' : 'video/mp4';
-  // ★ 重要：data.buffer ではなく View 長を保証する data 自体を渡す
-  return new Blob([data], { type: mime });
+
+  // ★ 重要：BlobPart は ArrayBuffer か ArrayBufferView<ArrayBuffer> が必要
+  // data の実体長に正確一致する ArrayBuffer を作り、これを Blob に渡す
+  const ab = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
+  return new Blob([ab], { type: mime });
 }
 
 /* ---------------- 画像→PNG バイト列 ---------------- */

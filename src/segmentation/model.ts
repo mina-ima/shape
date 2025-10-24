@@ -4,8 +4,22 @@
 // - 既定は /models/u2netp.onnx（resolveU2NetModelUrl 経由）
 // - 公開APIは従来どおり：loadOnnxModel / runOnnxInference / getInputInfo / resolveHWFromMeta
 
-import { InferenceSession, Tensor } from "onnxruntime-web";
-import { resolveU2NetModelUrl } from "@/models/loadU2Net"; // パスエイリアスが無ければ相対に変更
+import type { InferenceSession, Tensor } from "onnxruntime-web"; // ★ 実体は動的import、ここは型だけ
+import { resolveU2NetModelUrl } from "@/models/loadU2Net";
+
+// onnxruntime の実体を遅延ロード（重い依存を初期バンドルから外す）
+let _ort: any | null = null;
+async function getOrt() {
+  if (!_ort) {
+    _ort = await import("onnxruntime-web/dist/ort.bundle.min.mjs");
+    // vite.config.ts で *.wasm をルートへ出している前提
+    // 例）viteStaticCopy({ targets: [{ src: 'node_modules/onnxruntime-web/dist/*.wasm', dest: '.' }] })
+    if (_ort?.env?.wasm) {
+      _ort.env.wasm.wasmPaths = "/"; // ルート配信に合わせる
+    }
+  }
+  return _ort;
+}
 
 // 単純キャッシュ付きのセッション。テスト/実機で共有。
 let _session: InferenceSession | null = null;
@@ -18,16 +32,14 @@ let _session: InferenceSession | null = null;
 export async function loadOnnxModel(modelPath?: string): Promise<InferenceSession> {
   if (_session) return _session;
 
-  const selected =
-    modelPath ?? (await resolveU2NetModelUrl("u2netp", "/models"));
-
+  const selected = modelPath ?? (await resolveU2NetModelUrl("u2netp", "/models"));
   console.log("[Model] Using ONNX:", selected);
 
-  // 実環境での安定化用オプション
-  _session = await InferenceSession.create(selected, {
-    executionProviders: ["wasm"],
+  const ort = await getOrt();
+  _session = (await ort.InferenceSession.create(selected, {
+    executionProviders: ["wasm"], // WebGPU/WebGLは必要になれば追加
     graphOptimizationLevel: "all",
-  } as any);
+  })) as InferenceSession;
 
   return _session;
 }
@@ -36,7 +48,7 @@ export async function loadOnnxModel(modelPath?: string): Promise<InferenceSessio
  * 入力名/shape 用の軽量ヘルパ
  */
 export function getInputInfo(session: InferenceSession) {
-  const names = session.inputNames ?? [];
+  const names = (session as any).inputNames ?? [];
   const name = names[0] ?? "input"; // 最初の入力を想定（なければ保険）
   let dims: number[] | undefined;
 
@@ -50,10 +62,7 @@ export function getInputInfo(session: InferenceSession) {
 /**
  * メタデータから H,W を解決（NCHW 前提）。なければ fallbackSize の正方。
  */
-export function resolveHWFromMeta(
-  dims: number[] | undefined,
-  fallbackSize: number,
-) {
+export function resolveHWFromMeta(dims: number[] | undefined, fallbackSize: number) {
   let h = fallbackSize;
   let w = fallbackSize;
   if (dims && dims.length === 4) {
@@ -69,9 +78,7 @@ export function resolveHWFromMeta(
  * 実機では targetResolution を渡せば [W, H] を返すだけの軽量関数。
  * （テストでは vi.mock で差し替え可能）
  */
-export function getOnnxInputDimensions(
-  targetResolution = 512,
-): [number, number] {
+export function getOnnxInputDimensions(targetResolution = 512): [number, number] {
   return [targetResolution, targetResolution];
 }
 
@@ -87,12 +94,12 @@ export async function runOnnxInference(input: Tensor): Promise<Tensor> {
 
   // 入力名の決定
   const inputName =
-    (session.inputNames && session.inputNames[0]) || "input" || ("0" as string);
+    ((session as any).inputNames && (session as any).inputNames[0]) || "input" || ("0" as string);
 
   const feeds: Record<string, Tensor> = { [inputName]: input };
 
   // まずは素直に実行
-  let outputs: any = await session.run(feeds);
+  let outputs: any = await (session as any).run(feeds);
 
   // 候補順に探索
   const preferred = [
@@ -102,25 +109,24 @@ export async function runOnnxInference(input: Tensor): Promise<Tensor> {
     "saliency",
     "output",
     "out1",
-    // @ts-ignore onnxruntime-web 型差異に備えた保険
-    ...(session.outputNames ?? []),
+    // onnxruntime-web 型差異に備えた保険
+    ...(((session as any).outputNames ?? []) as string[]),
     ...Object.keys(outputs ?? {}),
   ];
 
   for (const k of preferred) {
     const t = outputs?.[k];
-    if (t) return t;
+    if (t) return t as Tensor;
   }
 
   // outputNames があるなら fetches 指定で再実行
-  // @ts-ignore
-  const names: string[] = (session.outputNames ?? []) as string[];
+  const names: string[] = (((session as any).outputNames ?? []) as string[]);
   if (names.length) {
     try {
-      outputs = await session.run(feeds, names);
+      outputs = await (session as any).run(feeds, names);
       for (const k of names) {
         const t = outputs?.[k];
-        if (t) return t;
+        if (t) return t as Tensor;
       }
     } catch {
       // 無視して最終フォールバックへ
@@ -132,5 +138,7 @@ export async function runOnnxInference(input: Tensor): Promise<Tensor> {
   const h = 320;
   const data = new Float32Array(w * h);
   for (let i = 0; i < data.length; i++) data[i] = (i % w) / Math.max(1, w - 1);
-  return new Tensor("float32", data, [1, 1, h, w]);
+
+  const ort = await getOrt();
+  return new ort.Tensor("float32", data, [1, 1, h, w]) as Tensor;
 }
