@@ -1,22 +1,24 @@
 // src/encode/encoder.ts
 /* eslint-disable no-console */
 
-// ★ 変更点：@ffmpeg/ffmpeg を「静的 import」へ（本番の動的 import 失敗対策）
-import { createFFmpeg as _createFFmpeg } from '@ffmpeg/ffmpeg';
+// ★ @ffmpeg/ffmpeg は名前空間importで受け取り、createFFmpeg を安全に取得
+import * as FF from '@ffmpeg/ffmpeg';
 
-/* ---------------- ffmpeg ローダ（ラッパ：既定で worker:false & 同一オリジンcorePath） ---------------- */
+/* ---------------- ffmpeg ローダ（既定: worker:false & 同一オリジン corePath） ---------------- */
 async function getCreateFFmpeg(): Promise<null | ((opts?: any) => any)> {
   try {
+    const _createFFmpeg =
+      (FF as any)?.createFFmpeg ?? (FF as any)?.default?.createFFmpeg;
     if (typeof _createFFmpeg !== 'function') return null;
 
-    // 呼び出し側が何も渡さなくてもワーカー無しで同一オリジンのコアを使う
+    // 既定設定：worker:false（COOP/COEP不要）& corePath は /ffmpeg/ffmpeg-core.js
     return (opts: any = {}) => {
       const merged: any = { log: false, worker: false, ...opts };
       if (!('corePath' in merged)) merged.corePath = '/ffmpeg/ffmpeg-core.js';
       return _createFFmpeg(merged);
     };
   } catch {
-    return null; // バンドルに含まれていない等で参照できない場合
+    return null;
   }
 }
 
@@ -38,13 +40,11 @@ function isIOS(): boolean {
   const applePlatform = /iPad|iPhone|iPod/.test(platform);
   return iOSFamily || touchOnMac || applePlatform;
 }
-
 function isAndroid(): boolean {
   return /Android/i.test(navigator.userAgent);
 }
-
 export function getPreferredMimeType(): Mime {
-  // ギャラリー等の互換性を最優先：iOS/Android は MP4、その他は WebM
+  // 端末ギャラリー互換優先：iOS/Android は MP4、その他は WebM
   return (isIOS() || isAndroid()) ? 'video/mp4' : 'video/webm';
 }
 function altPreferred(mime: Mime): Mime {
@@ -215,7 +215,8 @@ async function toDrawable(src: AnyFrame, fallbackSize?: { width: number; height:
         : (src as Uint8Array | Uint8ClampedArray);
     const rgba = ensureUint8Clamped(bytes);
     const c = document.createElement('canvas');
-    c.width = w; c.height = h;
+    c.width = w;
+    c.height = h;
     const ctx = c.getContext('2d');
     if (!ctx) throw new Error('2D context unavailable');
     const id = makeImageData(rgba, w, h);
@@ -245,7 +246,8 @@ async function toDrawable(src: AnyFrame, fallbackSize?: { width: number; height:
       const channels = maybe.channels ?? 4;
       const rgba = channels === 4 ? buf : expandToRgba(buf, w, h, channels);
       const c = document.createElement('canvas');
-      c.width = w; c.height = h;
+      c.width = w;
+      c.height = h;
       const ctx = c.getContext('2d');
       if (!ctx) throw new Error('2D context unavailable');
       const id = makeImageData(rgba, w, h);
@@ -290,7 +292,6 @@ export async function encodeVideoWithMeta(
   const primary: Mime = preferredMime ?? getPreferredMimeType();
   const secondary: Mime = altPreferred(primary);
 
-  // ---- MediaRecorder は端末依存のため全面停止。常に ffmpeg.wasm で生成する ----
   try {
     const blob = await encodeWithFFmpeg(frames, fps, primary);
     const mime = (blob.type || primary) as Mime;
@@ -315,7 +316,7 @@ async function encodeWithFFmpeg(
   const createFFmpeg = await getCreateFFmpeg();
   if (!createFFmpeg) throw new Error('ffmpeg-unavailable');
 
-  const ffmpeg = createFFmpeg(); // ラッパ既定: worker:false & corePath=/ffmpeg/ffmpeg-core.js
+  const ffmpeg = createFFmpeg(); // 既定: worker:false & corePath=/ffmpeg/ffmpeg-core.js
   if (!ffmpeg.isLoaded()) await ffmpeg.load();
 
   // 解像度を先に決める
@@ -355,7 +356,7 @@ async function encodeWithFFmpeg(
           '-bufsize', '4M',
           '-movflags', '+faststart',
           '-r', String(fps),
-          '-g', String(Math.max(1, Math.round(fps * 2))), // キーフレーム間隔を短めに
+          '-g', String(Math.max(1, Math.round(fps * 2))),
           out
         ];
 
@@ -369,9 +370,6 @@ async function encodeWithFFmpeg(
   } catch {}
 
   const mime = target === 'video/webm' ? 'video/webm' : 'video/mp4';
-
-  // ★ 重要：BlobPart は ArrayBuffer か ArrayBufferView<ArrayBuffer> が必要
-  // data の実体長に正確一致する ArrayBuffer を作り、これを Blob に渡す
   const ab = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
   return new Blob([ab], { type: mime });
 }

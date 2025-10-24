@@ -39,7 +39,7 @@ export default defineConfig({
     format: "es"
   },
   optimizeDeps: {
-    exclude: ["onnxruntime-web"]
+    exclude: ["onnxruntime-web", "@ffmpeg/ffmpeg"],
   },
   resolve: {
     alias: {
