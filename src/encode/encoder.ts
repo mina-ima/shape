@@ -1,21 +1,22 @@
 // src/encode/encoder.ts
 /* eslint-disable no-console */
 
+// ★ 変更点：@ffmpeg/ffmpeg を「静的 import」へ（本番の動的 import 失敗対策）
+import { createFFmpeg as _createFFmpeg } from '@ffmpeg/ffmpeg';
+
 /* ---------------- ffmpeg ローダ（ラッパ：既定で worker:false & 同一オリジンcorePath） ---------------- */
 async function getCreateFFmpeg(): Promise<null | ((opts?: any) => any)> {
   try {
-    const mod: any = await import('@ffmpeg/ffmpeg');
-    const create = mod?.createFFmpeg ?? mod?.default?.createFFmpeg;
-    if (typeof create !== 'function') return null;
+    if (typeof _createFFmpeg !== 'function') return null;
 
     // 呼び出し側が何も渡さなくてもワーカー無しで同一オリジンのコアを使う
     return (opts: any = {}) => {
       const merged: any = { log: false, worker: false, ...opts };
       if (!('corePath' in merged)) merged.corePath = '/ffmpeg/ffmpeg-core.js';
-      return create(merged);
+      return _createFFmpeg(merged);
     };
   } catch {
-    return null; // 依存が解決できない環境では ffmpeg をスキップ
+    return null; // バンドルに含まれていない等で参照できない場合
   }
 }
 
