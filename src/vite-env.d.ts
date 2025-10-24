@@ -15,3 +15,7 @@ interface FileSystemWritableFileStream extends WritableStream {
   write(data: BufferSource | Blob): Promise<void>;
   close(): Promise<void>;
 }
+
+declare module 'onnxruntime-web/dist/ort.bundle.min.mjs' {
+  export * from 'onnxruntime-web';
+}
