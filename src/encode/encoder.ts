@@ -524,7 +524,7 @@ async function canvasSourceToJpegBytes(
   src: CanvasImageSource,
   width: number,
   height: number,
-  quality = 0.8
+  quality = 0.7
 ): Promise<Uint8Array> {
   const c = document.createElement('canvas');
   c.width = width; c.height = height;
