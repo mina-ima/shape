@@ -509,10 +509,10 @@ async function encodeWithFFmpegLoop(
 
   const mime = target === 'video/webm' ? 'video/webm' : 'video/mp4';
   // ★ 安定策：data.buffer ではなく data をそのまま Blob へ（既知の互換対策）:contentReference[oaicite:1]{index=1}
-  // TS2322 ビルドエラー対策：Vercel 環境では Uint8Array<ArrayBufferLike> を BlobPart に代入できないため、
-  // いったん ArrayBuffer に変換してから Blob を生成する。
-  const ab = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
-  return new Blob([ab], { type: mime });
+  // TS2322 ビルドエラー対策：data.buffer が SharedArrayBuffer の可能性があるため、
+  // new Uint8Array(data) でコピーを強制し、必ず標準の ArrayBuffer を持つようにする。
+  const safeData = new Uint8Array(data);
+  return new Blob([safeData.buffer], { type: mime });
 }
 
 /* ---------------- 画像→JPEG バイト列 ---------------- */
