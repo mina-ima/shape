@@ -6,7 +6,8 @@
  * - ffmpeg.wasm を「関数API(createFFmpeg)」「クラスAPI(FFmpeg)」どちらでも使えるよう吸収
  * - Vite の動的 import → CDN(ESM) → CDN(UMD) の順でフォールバック
  * - API 差分（FS/run vs writeFile/exec）を統一
- * - 出力の妥当性チェックと短尺対策（最小尺1s）を実施
+ * - 出力の妥当性チェックと短尺対策（最小尺1s）
+ * - ★ FS error 回避：PNG ではなく JPEG(品質0.75) で連番書き出し（大幅に軽量）
  */
 
 type Mime = 'video/webm' | 'video/mp4';
@@ -19,6 +20,7 @@ type EncodeInput = number | EncodeOptions;
 
 const MIN_VALID_SIZE = 64 * 1024; // 64KB 未満は破損/短尺とみなす
 const MIN_DURATION_SEC = 1;       // 最小尺
+const MAX_FRAMES_HARD = 600;      // 安全上限（例: 10s@60fps）
 
 /* ---------------- small utils ---------------- */
 
@@ -54,7 +56,7 @@ function isAndroid(): boolean {
   return /Android/i.test(navigator.userAgent);
 }
 export function getPreferredMimeType(): Mime {
-  // Android/iOS は mp4 を優先（再生互換の観点）
+  // Android/iOS は mp4 を優先（再生互換）
   return (isIOS() || isAndroid()) ? 'video/mp4' : 'video/webm';
 }
 function altPreferred(mime: Mime): Mime {
@@ -287,13 +289,11 @@ async function toDrawable(src: AnyFrame, fallbackSize?: { width: number; height:
 
 /* ---------------- FFmpeg ローダ（関数API/クラスAPI 両対応） ---------------- */
 
-type FFmpegRunStyle = 'classic' | 'modern';
 type FFmpegClassic = {
   isLoaded(): boolean;
   load(): Promise<void>;
   FS(op: string, path: string, data?: Uint8Array): any;
   run(...args: string[]): Promise<void>;
-  _options?: Record<string, any>;
 };
 type FFmpegModern = {
   loaded: boolean;
@@ -415,11 +415,11 @@ export async function encodeVideoWithMeta(
 ): Promise<{ blob: Blob; filename: string; mime: Mime }> {
   if (!frames?.length) throw new Error('encodeVideo: frames is empty');
 
-  // 端末互換優先：iOS/Android は mp4 を第一候補（既存実装を踏襲）
+  // 端末互換優先：iOS/Android は mp4 を第一候補
   const primary: Mime = preferredMime ?? getPreferredMimeType();
   const secondary: Mime = altPreferred(primary);
 
-  // ffmpeg でまず primary を試す。NGなら secondary。
+  // ffmpeg でまず primary を試す。小さすぎ/失敗なら secondary。
   try {
     const blob = await encodeWithFFmpeg(frames, fps, primary);
     if (blob.size >= MIN_VALID_SIZE) {
@@ -459,28 +459,27 @@ async function encodeWithFFmpeg(
 
   // --- 短尺対策：最小 1 秒ぶんのフレーム数まで複製 ---
   const minFrames = Math.max(2, Math.round(Math.max(1, fps) * MIN_DURATION_SEC));
-  const effCount = Math.max(frames.length, minFrames);
+  const cappedLen = Math.min(Math.max(frames.length, minFrames), MAX_FRAMES_HARD);
 
-  // 連番PNGを書き出し
-  for (let i = 0; i < effCount; i++) {
-    // 元フレームが不足している場合、最後のフレームを繰り返す
+  // 連番JPEGを書き出し（PNGより大幅に軽く、FS error 回避）
+  for (let i = 0; i < cappedLen; i++) {
     const srcIdx = Math.min(i, frames.length - 1);
     // eslint-disable-next-line no-await-in-loop
     const drawable = await toDrawable(frames[srcIdx] as any, { width, height });
-    const png = canvasSourceToPng(drawable as any, width, height);
-    const name = `frame_${String(i).padStart(5, '0')}.png`;
     // eslint-disable-next-line no-await-in-loop
-    await ff.write(name, png);
+    const jpg = await canvasSourceToJpegBytes(drawable as any, width, height, 0.75);
+    const name = `frame_${String(i).padStart(5, '0')}.jpg`;
+    // eslint-disable-next-line no-await-in-loop
+    await ff.write(name, jpg);
   }
 
   // 出力設定（再生互換最優先：mp4 は H.264 Baseline + yuv420p + faststart）
-  // 既存の良設定を踏襲（Android/iOS 互換）:contentReference[oaicite:1]{index=1}
   const out = target === 'video/webm' ? 'out.webm' : 'out.mp4';
   const args =
     target === 'video/webm'
       ? [
           '-framerate', String(fps),
-          '-i', 'frame_%05d.png',
+          '-i', 'frame_%05d.jpg',
           '-c:v', 'libvpx-vp8',
           '-b:v', '2M',
           '-pix_fmt', 'yuv420p',
@@ -489,7 +488,7 @@ async function encodeWithFFmpeg(
         ]
       : [
           '-framerate', String(fps),
-          '-i', 'frame_%05d.png',
+          '-i', 'frame_%05d.jpg',
           '-c:v', 'libx264',
           '-profile:v', 'baseline',
           '-level', '3.1',
@@ -506,18 +505,33 @@ async function encodeWithFFmpeg(
   await ff.exec(args);
   const data: Uint8Array = await ff.read(out);
 
-  // 後始末（失敗しても無視：Unified では unlink 相当が無い実装もある）
-  try {
-    // 可能なら削除コマンドの代替を実行するが、無視しても実害なし
-  } catch {}
-
   const mime = target === 'video/webm' ? 'video/webm' : 'video/mp4';
   const ab = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
   return new Blob([ab], { type: mime });
 }
 
-/* ---------------- 画像→PNG バイト列 ---------------- */
+/* ---------------- 画像→JPEG/PNG バイト列 ---------------- */
 
+// JPEG（推奨）：toBlob を使ってメモリ節約＆高速化
+async function canvasSourceToJpegBytes(
+  src: CanvasImageSource,
+  width: number,
+  height: number,
+  quality = 0.75
+): Promise<Uint8Array> {
+  const c = document.createElement('canvas');
+  c.width = width; c.height = height;
+  const ctx = c.getContext('2d');
+  if (!ctx) throw new Error('2D context unavailable');
+  ctx.drawImage(src as any, 0, 0, width, height);
+  const blob: Blob = await new Promise((resolve, reject) => {
+    c.toBlob((b) => (b ? resolve(b) : reject(new Error('toBlob jpeg failed'))), 'image/jpeg', quality);
+  });
+  const buf = await blob.arrayBuffer();
+  return new Uint8Array(buf);
+}
+
+// PNG（フォールバック用：未使用だが残置）
 function canvasSourceToPng(src: CanvasImageSource, width: number, height: number): Uint8Array {
   const c = document.createElement('canvas');
   c.width = width; c.height = height;
