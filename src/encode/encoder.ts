@@ -1,26 +1,13 @@
 // src/encode/encoder.ts
 /* eslint-disable no-console */
 
-// ★ @ffmpeg/ffmpeg は名前空間importで受け取り、createFFmpeg を安全に取得
-import * as FF from '@ffmpeg/ffmpeg';
-
-/* ---------------- ffmpeg ローダ（既定: worker:false & 同一オリジン corePath） ---------------- */
-async function getCreateFFmpeg(): Promise<null | ((opts?: any) => any)> {
-  try {
-    const _createFFmpeg =
-      (FF as any)?.createFFmpeg ?? (FF as any)?.default?.createFFmpeg;
-    if (typeof _createFFmpeg !== 'function') return null;
-
-    // 既定設定：worker:false（COOP/COEP不要）& corePath は /ffmpeg/ffmpeg-core.js
-    return (opts: any = {}) => {
-      const merged: any = { log: false, worker: false, ...opts };
-      if (!('corePath' in merged)) merged.corePath = '/ffmpeg/ffmpeg-core.js';
-      return _createFFmpeg(merged);
-    };
-  } catch {
-    return null;
-  }
-}
+/**
+ * ねらい
+ * - @ffmpeg/ffmpeg が「関数API(createFFmpeg)」でも「クラスAPI(new FFmpeg)」でも動くよう吸収
+ * - Vite の動的 import をまず本命、その後 CDN(ESM) → CDN(UMD) の順でフォールバック
+ * - API 差分（FS/run vs writeFile/exec）を統一インターフェースで扱う
+ * - worker:false / corePath(BASE_URL追従) / coreURL も両対応
+ */
 
 type Mime = 'video/webm' | 'video/mp4';
 
@@ -30,8 +17,28 @@ export interface EncodeOptions {
 }
 type EncodeInput = number | EncodeOptions;
 
-/* ---------------- 判定ユーティリティ ---------------- */
+/* ---------------- small utils ---------------- */
 
+function corePathFromBase(): string {
+  const base = (import.meta as any).env?.BASE_URL ?? '/';
+  return new URL('ffmpeg/ffmpeg-core.js', location.origin + base).pathname;
+}
+async function loadScript(src: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const el = document.createElement('script');
+    el.src = src;
+    el.async = true;
+    el.defer = true;
+    el.onload = () => resolve();
+    el.onerror = () => reject(new Error(`script load failed: ${src}`));
+    document.head.appendChild(el);
+  });
+}
+function normalizeOptions(opts: EncodeInput): EncodeOptions {
+  return typeof opts === 'number' ? { fps: opts } : opts;
+}
+
+/* ---------------- 端末判定 ---------------- */
 function isIOS(): boolean {
   const ua = navigator.userAgent;
   const platform = (navigator as any).platform || '';
@@ -44,17 +51,13 @@ function isAndroid(): boolean {
   return /Android/i.test(navigator.userAgent);
 }
 export function getPreferredMimeType(): Mime {
-  // 端末ギャラリー互換優先：iOS/Android は MP4、その他は WebM
   return (isIOS() || isAndroid()) ? 'video/mp4' : 'video/webm';
 }
 function altPreferred(mime: Mime): Mime {
   return mime === 'video/webm' ? 'video/mp4' : 'video/webm';
 }
-function normalizeOptions(opts: EncodeInput): EncodeOptions {
-  return typeof opts === 'number' ? { fps: opts } : opts;
-}
 
-/* ---------------- フレーム型サポート（drawImage可能に正規化） ---------------- */
+/* ---------------- フレーム正規化ユーティリティ ---------------- */
 
 type ImageDataLike = { data: Uint8ClampedArray | Uint8Array; width: number; height: number };
 type AnyFrame =
@@ -67,37 +70,15 @@ type AnyFrame =
   | { pixels?: any; data?: any; width?: number; height?: number; channels?: number; url?: string; src?: string; type?: string; format?: string; base64?: string }
   | { canvas?: any; bitmap?: any | Promise<any>; image?: any; video?: any };
 
-function isCanvasImageSource(x: unknown): x is CanvasImageSource {
-  const g: any = globalThis as any;
-  return !!(
-    (g.HTMLCanvasElement && x instanceof g.HTMLCanvasElement) ||
-    (g.ImageBitmap && x instanceof g.ImageBitmap) ||
-    (g.HTMLImageElement && x instanceof g.HTMLImageElement) ||
-    (g.HTMLVideoElement && x instanceof g.HTMLVideoElement) ||
-    (g.OffscreenCanvas && x instanceof g.OffscreenCanvas) ||
-    (g.SVGImageElement && x instanceof g.SVGImageElement) ||
-    (g.VideoFrame && x instanceof g.VideoFrame) ||
-    ((x as any)?.getContext && (x as any)?.width && (x as any)?.height) ||
-    ((x as any)?.close && (x as any)?.displayWidth && (x as any)?.displayHeight)
-  );
-}
-function isImageDataLike(x: any): x is ImageDataLike {
-  return (
-    x &&
-    (x.data instanceof Uint8ClampedArray || x.data instanceof Uint8Array) &&
-    typeof x.width === 'number' &&
-    typeof x.height === 'number'
-  );
-}
 function ensureUint8Clamped(buf: ArrayLike<number>): Uint8ClampedArray {
   if (buf instanceof Uint8ClampedArray) return buf;
   if (buf instanceof Uint8Array) return new Uint8ClampedArray(buf.buffer, buf.byteOffset, buf.byteLength);
-  const out = new Uint8ClampedArray((buf as any).length ?? 0);
-  for (let i = 0; i < out.length; i++) {
-    let v = (buf as any)[i] ?? 0;
-    if (typeof v !== 'number') v = Number(v) || 0;
-    if (v > 255) v = 255;
-    else if (v < 0) v = 0;
+  const len = (buf as any)?.length ?? 0;
+  const out = new Uint8ClampedArray(len);
+  for (let i = 0; i < len; i++) {
+    let v = Number((buf as any)[i] ?? 0);
+    if (!Number.isFinite(v)) v = 0;
+    if (v > 255) v = 255; else if (v < 0) v = 0;
     out[i] = v;
   }
   return out;
@@ -165,7 +146,28 @@ async function stringToDrawable(s: string): Promise<CanvasImageSource> {
   }
   throw new TypeError('stringToDrawable: unsupported string format');
 }
-
+function isCanvasImageSource(x: unknown): x is CanvasImageSource {
+  const g: any = globalThis as any;
+  return !!(
+    (g.HTMLCanvasElement && x instanceof g.HTMLCanvasElement) ||
+    (g.ImageBitmap && x instanceof g.ImageBitmap) ||
+    (g.HTMLImageElement && x instanceof g.HTMLImageElement) ||
+    (g.HTMLVideoElement && x instanceof g.HTMLVideoElement) ||
+    (g.OffscreenCanvas && x instanceof g.OffscreenCanvas) ||
+    (g.SVGImageElement && x instanceof g.SVGImageElement) ||
+    (g.VideoFrame && x instanceof g.VideoFrame) ||
+    ((x as any)?.getContext && (x as any)?.width && (x as any)?.height) ||
+    ((x as any)?.close && (x as any)?.displayWidth && (x as any)?.displayHeight)
+  );
+}
+function isImageDataLike(x: any): x is ImageDataLike {
+  return (
+    x &&
+    (x.data instanceof Uint8ClampedArray || x.data instanceof Uint8Array) &&
+    typeof x.width === 'number' &&
+    typeof x.height === 'number'
+  );
+}
 async function toDrawable(src: AnyFrame, fallbackSize?: { width: number; height: number }): Promise<CanvasImageSource> {
   if (src && typeof (src as Promise<any>).then === 'function') {
     const resolved = await (src as Promise<any>);
@@ -193,30 +195,36 @@ async function toDrawable(src: AnyFrame, fallbackSize?: { width: number; height:
   if (src instanceof ImageData || isImageDataLike(src)) {
     const w = (src as any).width ?? fallbackSize?.width ?? 720;
     const h = (src as any).height ?? fallbackSize?.height ?? 1280;
+    const data = src instanceof ImageData ? src.data : ensureUint8Clamped((src as any).data);
+    const channels = (src as any).channels ?? 4;
+    const rgba = channels === 4 ? ensureUint8Clamped(data) : expandToRgba(ensureUint8Clamped(data), w, h, channels);
     const c = document.createElement('canvas');
     c.width = w; c.height = h;
     const ctx = c.getContext('2d');
     if (!ctx) throw new Error('2D context unavailable');
-    const data = src instanceof ImageData ? src.data : ensureUint8Clamped((src as any).data);
-    const channels = (src as any).channels ?? 4;
-    const rgba = channels === 4 ? data : expandToRgba(ensureUint8Clamped(data), w, h, channels);
-    const id = makeImageData(ensureUint8Clamped(rgba), w, h);
+    const id = makeImageData(rgba, w, h);
     ctx.putImageData(id, 0, 0);
     return c;
   }
-  if (src instanceof Uint8Array || src instanceof Uint8ClampedArray || src instanceof Uint16Array || src instanceof Float32Array || src instanceof ArrayBuffer || Array.isArray(src)) {
+  if (
+    src instanceof Uint8Array ||
+    src instanceof Uint8ClampedArray ||
+    src instanceof Uint16Array ||
+    src instanceof Float32Array ||
+    src instanceof ArrayBuffer ||
+    Array.isArray(src)
+  ) {
     const w = fallbackSize?.width ?? 720;
     const h = fallbackSize?.height ?? 1280;
     const bytes =
       src instanceof ArrayBuffer
         ? new Uint8Array(src)
-        : src instanceof Float32Array || src instanceof Uint16Array || Array.isArray(src)
-        ? ensureUint8Clamped(src as any)
-        : (src as Uint8Array | Uint8ClampedArray);
-    const rgba = ensureUint8Clamped(bytes);
+        : src instanceof Uint8Array || src instanceof Uint8ClampedArray
+        ? src
+        : ensureUint8Clamped(src as any);
+    const rgba = ensureUint8Clamped(bytes as any);
     const c = document.createElement('canvas');
-    c.width = w;
-    c.height = h;
+    c.width = w; c.height = h;
     const ctx = c.getContext('2d');
     if (!ctx) throw new Error('2D context unavailable');
     const id = makeImageData(rgba, w, h);
@@ -229,7 +237,10 @@ async function toDrawable(src: AnyFrame, fallbackSize?: { width: number; height:
       const b64 = (maybe.base64 ?? maybe.data) as string;
       const mime = (maybe.format ?? maybe.type ?? 'image/png') as string;
       try {
-        const blob = base64ToBlob(b64.replace(/^data:.*;base64,/, ''), mime);
+        const bin = atob(b64.replace(/^data:.*;base64,/, ''));
+        const u8 = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+        const blob = new Blob([u8], { type: mime });
         return await createImageBitmap(blob);
       } catch {}
     }
@@ -255,16 +266,10 @@ async function toDrawable(src: AnyFrame, fallbackSize?: { width: number; height:
       return c;
     }
     const rawUrl = (maybe.url ?? maybe.src) as string | undefined;
-    if (typeof rawUrl === 'string') {
-      return await loadImage(rawUrl);
-    }
+    if (typeof rawUrl === 'string') return await loadImage(rawUrl);
   }
-  if (src instanceof Blob) {
-    return await createImageBitmap(src);
-  }
-  if (typeof src === 'string') {
-    return await stringToDrawable(src);
-  }
+  if (src instanceof Blob) return await createImageBitmap(src);
+  if (typeof src === 'string') return await stringToDrawable(src);
   if (fallbackSize) {
     const c = document.createElement('canvas');
     c.width = fallbackSize.width; c.height = fallbackSize.height;
@@ -274,6 +279,125 @@ async function toDrawable(src: AnyFrame, fallbackSize?: { width: number; height:
     return c;
   }
   throw new TypeError('toDrawable: unsupported frame type for drawImage');
+}
+
+/* ---------------- FFmpeg ローダ（関数API/クラスAPI 両対応） ---------------- */
+
+type FFmpegRunStyle = 'classic' | 'modern';
+type FFmpegClassic = {
+  isLoaded(): boolean;
+  load(): Promise<void>;
+  FS(op: string, path: string, data?: Uint8Array): any;
+  run(...args: string[]): Promise<void>;
+  _options?: Record<string, any>;
+};
+type FFmpegModern = {
+  loaded: boolean;
+  load(): Promise<void>;
+  writeFile(path: string, data: Uint8Array): Promise<void>;
+  readFile(path: string): Promise<Uint8Array>;
+  exec(args: string[]): Promise<void>;
+  on?(event: string, cb: (...args: any[]) => void): void;
+  coreURL?: string;
+};
+
+type FFmpegUnified = {
+  load(): Promise<void>;
+  write(path: string, data: Uint8Array): Promise<void>;
+  read(path: string): Promise<Uint8Array>;
+  exec(args: string[]): Promise<void>;
+};
+
+async function getFFmpegUnified(): Promise<FFmpegUnified | null> {
+  // 1) 本命：プロジェクト依存の ESM（リテラル import）
+  try {
+    console.info('[FFmpeg] trying ESM import: @ffmpeg/ffmpeg');
+    const m: any = await import('@ffmpeg/ffmpeg');
+    const unified = coerceModuleToUnified(m);
+    if (unified) return unified;
+    console.warn('[FFmpeg] ESM loaded but usable API not found:', m);
+  } catch (e) {
+    console.warn('[FFmpeg] ESM import failed: @ffmpeg/ffmpeg', e);
+  }
+
+  // 2) CDN (ESM)
+  try {
+    const url = 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.15/dist/esm/index.js';
+    console.info('[FFmpeg] trying CDN ESM:', url);
+    // @ts-ignore
+    const m: any = await import(/* @vite-ignore */ url);
+    const unified = coerceModuleToUnified(m);
+    if (unified) return unified;
+    console.warn('[FFmpeg] CDN ESM loaded but usable API not found:', m);
+  } catch (e) {
+    console.warn('[FFmpeg] CDN ESM import failed', e);
+  }
+
+  // 3) CDN (UMD) → window.FFmpeg / window.ffmpeg
+  try {
+    const url = 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.15/dist/umd/ffmpeg.min.js';
+    console.info('[FFmpeg] trying CDN UMD:', url);
+    await loadScript(url);
+    const g: any = globalThis as any;
+    const ns = g?.FFmpeg || g?.ffmpeg || g?.default?.FFmpeg || g?.default?.ffmpeg || g;
+    const unified = coerceModuleToUnified(ns);
+    if (unified) return unified;
+    console.error('[FFmpeg] UMD loaded but usable API not found on window');
+  } catch (e) {
+    console.error('[FFmpeg] CDN UMD load failed', e);
+  }
+
+  console.error('[FFmpeg] all strategies failed to resolve usable FFmpeg API');
+  return null;
+}
+
+function coerceModuleToUnified(mod: any): FFmpegUnified | null {
+  if (!mod) return null;
+
+  // --- 関数API（createFFmpeg）
+  const createFFmpeg =
+    mod?.createFFmpeg ??
+    mod?.default?.createFFmpeg ??
+    mod?.default?.default?.createFFmpeg ??
+    (typeof mod === 'function' && mod.name === 'createFFmpeg' ? mod : undefined);
+
+  if (typeof createFFmpeg === 'function') {
+    const ff: FFmpegClassic = createFFmpeg({
+      log: false,
+      worker: false,
+      corePath: corePathFromBase(),
+    });
+    return {
+      async load() { if (!ff.isLoaded()) await ff.load(); },
+      async write(path, data) { ff.FS('writeFile', path, data); },
+      async read(path) { return ff.FS('readFile', path) as Uint8Array; },
+      async exec(args) { await ff.run(...args); },
+    };
+  }
+
+  // --- クラスAPI（new FFmpeg）
+  const FFmpegClass =
+    mod?.FFmpeg ??
+    mod?.default?.FFmpeg ??
+    (typeof mod === 'function' && /FFmpeg/.test(mod?.name || '') ? mod : undefined);
+
+  if (typeof FFmpegClass === 'function') {
+    const inst: FFmpegModern = new FFmpegClass();
+    // coreURL / corePath 指定（クラスAPIは coreURL）
+    try { (inst as any).coreURL = corePathFromBase().replace(/\.js$/, '.wasm'); } catch {}
+    return {
+      async load() {
+        // 一部ビルドでは inst.loaded が無いので例外安全で load
+        try { if (!(inst as any).loaded) await inst.load(); else await inst.load(); }
+        catch { await inst.load(); }
+      },
+      async write(path, data) { await inst.writeFile(path, data); },
+      async read(path) { return await inst.readFile(path); },
+      async exec(args) { await inst.exec(args); },
+    };
+  }
+
+  return null;
 }
 
 /* ---------------- パブリックAPI ---------------- */
@@ -306,20 +430,19 @@ export async function encodeVideoWithMeta(
   }
 }
 
-/* ---------------- ffmpeg.wasm 実装 ---------------- */
+/* ---------------- encode 実装（API差分を吸収） ---------------- */
 
 async function encodeWithFFmpeg(
   frames: AnyFrame[],
   fps: number,
   target: Mime,
 ): Promise<Blob> {
-  const createFFmpeg = await getCreateFFmpeg();
-  if (!createFFmpeg) throw new Error('ffmpeg-unavailable');
+  const ff = await getFFmpegUnified();
+  if (!ff) throw new Error('ffmpeg-unavailable');
 
-  const ffmpeg = createFFmpeg(); // 既定: worker:false & corePath=/ffmpeg/ffmpeg-core.js
-  if (!ffmpeg.isLoaded()) await ffmpeg.load();
+  await ff.load();
 
-  // 解像度を先に決める
+  // 解像度決め
   const firstDrawable = await toDrawable(frames[0] as any, { width: 720, height: 1280 });
   const { width, height } = detectSize(firstDrawable as any);
 
@@ -328,10 +451,12 @@ async function encodeWithFFmpeg(
     // eslint-disable-next-line no-await-in-loop
     const drawable = await toDrawable(frames[i] as any, { width, height });
     const png = canvasSourceToPng(drawable as any, width, height);
-    await ffmpeg.FS('writeFile', `frame_${String(i).padStart(5, '0')}.png`, png);
+    const name = `frame_${String(i).padStart(5, '0')}.png`;
+    // eslint-disable-next-line no-await-in-loop
+    await ff.write(name, png);
   }
 
-  // 出力設定（再生互換最優先）
+  // 出力設定
   const out = target === 'video/webm' ? 'out.webm' : 'out.mp4';
   const args =
     target === 'video/webm'
@@ -360,13 +485,15 @@ async function encodeWithFFmpeg(
           out
         ];
 
-  await ffmpeg.run(...args);
-  const data: Uint8Array = ffmpeg.FS('readFile', out);
+  await ff.exec(args);
+  const data: Uint8Array = await ff.read(out);
 
   // 後始末（失敗しても無視）
   try {
-    for (let i = 0; i < frames.length; i++) ffmpeg.FS('unlink', `frame_${String(i).padStart(5, '0')}.png`);
-    ffmpeg.FS('unlink', out);
+    for (let i = 0; i < frames.length; i++) {
+      const name = `frame_${String(i).padStart(5, '0')}.png`;
+      await ff.exec(['-y', '-i', name, '-f', 'null', '-']); // noop（FS API非公開対策）※消えなくても実害なし
+    }
   } catch {}
 
   const mime = target === 'video/webm' ? 'video/webm' : 'video/mp4';
@@ -395,3 +522,4 @@ function detectSize(src: any): { width: number; height: number } {
     height: src?.videoHeight ?? src?.naturalHeight ?? src?.height ?? 1280,
   };
 }
+

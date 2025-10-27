@@ -8,6 +8,12 @@ importers:
 
   .:
     dependencies:
+      '@ffmpeg/core':
+        specifier: 0.12.10
+        version: 0.12.10
+      '@ffmpeg/ffmpeg':
+        specifier: 0.12.15
+        version: 0.12.15
       '@ffmpeg/util':
         specifier: 0.12.2
         version: 0.12.2
@@ -36,12 +42,6 @@ importers:
         specifier: 5.0.8
         version: 5.0.8(@types/react@19.1.15)(react@19.1.1)
     devDependencies:
-      '@ffmpeg/core':
-        specifier: 0.12.10
-        version: 0.12.10
-      '@ffmpeg/ffmpeg':
-        specifier: 0.12.15
-        version: 0.12.15
       '@testing-library/jest-dom':
         specifier: 6.8.0
         version: 6.8.0
