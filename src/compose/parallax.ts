@@ -230,9 +230,15 @@ export async function generateParallaxFrames(
       frameAlpha.convertTo(frameAlpha, -1, fadeAlpha);
       cv.merge(framePlanes, warpedBgRgba);
       framePlanes.delete();
+      frameAlpha.delete(); // ★ alpha も delete
     }
 
-    frames.push(warpedBgRgba);
+    // ★ cv.Mat ではなく、安全なプレーンオブジェクトを配列に格納
+    frames.push({
+      data: new Uint8ClampedArray(warpedBgRgba.data),
+      width,
+      height,
+    });
 
     // 後始末（フレームごと）
     fgM.delete();
@@ -240,6 +246,7 @@ export async function generateParallaxFrames(
     warpedFg.delete();
     fgAlphaMask.delete();
     fgPlanes.delete();
+    warpedBgRgba.delete(); // ★ 格納後に delete
   }
 
   // 後始末（全体）
