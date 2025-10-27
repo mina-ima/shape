@@ -413,7 +413,23 @@ export async function encodeVideoWithMeta(
   const primary: Mime = preferredMime ?? getPreferredMimeType();
   const secondary: Mime = altPreferred(primary);
 
-  // 1) ffmpeg（単一JPEGルート）→ NG なら MR に切替
+  // 1) ★安定な MediaRecorder を最優先
+  try {
+    const mr = await import('./mediarec');
+    const blob = await mr.encodeWithMediaRecorder(
+      (frames as unknown) as any, fps, primary
+    );
+    if (blob.size >= MIN_VALID_SIZE) {
+      const mime = (blob.type || primary) as Mime;
+      const filename = mime === 'video/mp4' ? 'output.mp4' : 'output.webm';
+      return { blob, filename, mime };
+    }
+    console.warn('[Encode] MediaRecorder output too small, fallback to ffmpeg…');
+  } catch (e1) {
+    console.warn(`MediaRecorder failed with ${primary}, fallback to ffmpeg...`, e1);
+  }
+
+  // 2) フォールバックとして ffmpeg（単一JPEGルート）を試す
   try {
     const blob = await encodeWithFFmpegLoop(frames, fps, primary);
     if (blob.size >= MIN_VALID_SIZE) {
@@ -421,26 +437,13 @@ export async function encodeVideoWithMeta(
       const filename = mime === 'video/mp4' ? 'output.mp4' : 'output.webm';
       return { blob, filename, mime };
     }
-    console.warn('[Encode] FFmpeg output too small, fallback to MediaRecorder…');
-  } catch (e1) {
-    console.warn(`ffmpeg.wasm failed with ${primary}`, e1);
-  }
-
-  // 2) MediaRecorder フォールバック（実機互換対策）
-  try {
-    const mr = await import('./mediarec');
-    const blob = await mr.encodeWithMediaRecorder(
-      // cv.Mat ベースの経路が上流にある前提（toDrawableは mediarec 側で不要）
-      (frames as unknown) as any, fps, primary
-    );
-    const mime = (blob.type || primary) as Mime;
-    const filename = mime === 'video/mp4' ? 'output.mp4' : 'output.webm';
-    if (blob.size >= MIN_VALID_SIZE) return { blob, filename, mime };
+    console.warn('[Encode] FFmpeg output also too small, trying secondary mime…');
   } catch (e2) {
-    console.warn('[Encode] MediaRecorder fallback failed', e2);
+    console.warn(`ffmpeg.wasm failed with ${primary}, trying secondary mime...`, e2);
   }
 
-  // 3) 最後の手段：別MIMEで ffmpeg をもう一度（単一JPEGルート）
+  // 3) 最後の手段：別MIMEで ffmpeg をもう一度
+  console.log(`[Encode] Retrying with secondary mime: ${secondary}`);
   const blob = await encodeWithFFmpegLoop(frames, fps, secondary);
   const mime = (blob.type || secondary) as Mime;
   const filename = mime === 'video/mp4' ? 'output.mp4' : 'output.webm';
