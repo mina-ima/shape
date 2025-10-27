@@ -21,7 +21,8 @@ export default defineConfig({
           "ffmpeg/**",
           "**/*opencv*.wasm",
           "**/*.wasm", // 念のため、その他の wasm も precache 対象外
-          "ort.*.js" // onnxruntime の巨大なJSファイルを除外
+          "ort.*.js", // onnxruntime の巨大なJSファイルを除外
+          "**/opencv-*.js" // 本物のopencv.jsを含む巨大チャンクを除外
         ],
         // 巨大チャンクはなくなったので上限を5MBに戻す
         maximumFileSizeToCacheInBytes: 5 * 1024 * 1024
