@@ -3,11 +3,10 @@
 
 /**
  * ねらい
- * - ffmpeg.wasm を「関数API(createFFmpeg)」「クラスAPI(FFmpeg)」どちらでも使えるよう吸収
- * - Vite の動的 import → CDN(ESM) → CDN(UMD) の順でフォールバック
- * - API 差分（FS/run vs writeFile/exec）を統一
- * - 出力の妥当性チェックと短尺対策（最小尺1s）
- * - ★ FS error 回避：PNG ではなく JPEG(品質0.75) で連番書き出し（大幅に軽量）
+ * - ffmpeg.wasm を安定利用：まず「単一JPEG + -loop 1」で動画化（仮想FSを膨らませない）
+ * - それでも NG/極小なら MediaRecorder に即フォールバック（端末依存対策）
+ * - ESM/UMD 双方を許容し、corePath は同一オリジン /ffmpeg/ffmpeg-core.js を優先
+ * - 出力は H.264 Baseline + yuv420p + +faststart（Android/iOS 再生互換）を維持
  */
 
 type Mime = 'video/webm' | 'video/mp4';
@@ -18,9 +17,8 @@ export interface EncodeOptions {
 }
 type EncodeInput = number | EncodeOptions;
 
-const MIN_VALID_SIZE = 64 * 1024; // 64KB 未満は破損/短尺とみなす
-const MIN_DURATION_SEC = 1;       // 最小尺
-const MAX_FRAMES_HARD = 600;      // 安全上限（例: 10s@60fps）
+const MIN_VALID_SIZE = 64 * 1024; // 64KB 未満は不正/極短とみなす
+const MIN_DURATION_SEC = 1;       // 最小尺 1s
 
 /* ---------------- small utils ---------------- */
 
@@ -43,7 +41,8 @@ function normalizeOptions(opts: EncodeInput): EncodeOptions {
   return typeof opts === 'number' ? { fps: opts } : opts;
 }
 
-/* ---------------- 端末判定 ---------------- */
+/* ---------------- 端末判定 & MIME選択 ---------------- */
+
 function isIOS(): boolean {
   const ua = navigator.userAgent;
   const platform = (navigator as any).platform || '';
@@ -56,7 +55,6 @@ function isAndroid(): boolean {
   return /Android/i.test(navigator.userAgent);
 }
 export function getPreferredMimeType(): Mime {
-  // Android/iOS は mp4 を優先（再生互換）
   return (isIOS() || isAndroid()) ? 'video/mp4' : 'video/webm';
 }
 function altPreferred(mime: Mime): Mime {
@@ -99,7 +97,7 @@ function expandToRgba(buf: Uint8ClampedArray, w: number, h: number, channels: nu
   if (channels === 4) return buf;
   const out = new Uint8ClampedArray(w * h * 4);
   if (channels === 1) {
-    for (let i = 0, j = 0; i < buf.length; i += 1, j += 4) {
+    for (let i = 0, j = 0; i < buf.length; i++, j += 4) {
       const v = buf[i];
       out[j] = v; out[j + 1] = v; out[j + 2] = v; out[j + 3] = 255;
     }
@@ -313,7 +311,7 @@ type FFmpegUnified = {
 };
 
 async function getFFmpegUnified(): Promise<FFmpegUnified | null> {
-  // 1) ESM import（ローカル依存）
+  // 1) プロジェクト依存の ESM
   try {
     console.info('[FFmpeg] trying ESM import: @ffmpeg/ffmpeg');
     const m: any = await import('@ffmpeg/ffmpeg');
@@ -323,7 +321,6 @@ async function getFFmpegUnified(): Promise<FFmpegUnified | null> {
   } catch (e) {
     console.warn('[FFmpeg] ESM import failed: @ffmpeg/ffmpeg', e);
   }
-
   // 2) CDN (ESM)
   try {
     const url = 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.15/dist/esm/index.js';
@@ -336,8 +333,7 @@ async function getFFmpegUnified(): Promise<FFmpegUnified | null> {
   } catch (e) {
     console.warn('[FFmpeg] CDN ESM import failed', e);
   }
-
-  // 3) CDN (UMD) → window.FFmpeg / window.ffmpeg
+  // 3) CDN (UMD)
   try {
     const url = 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.15/dist/umd/ffmpeg.min.js';
     console.info('[FFmpeg] trying CDN UMD:', url);
@@ -350,7 +346,6 @@ async function getFFmpegUnified(): Promise<FFmpegUnified | null> {
   } catch (e) {
     console.error('[FFmpeg] CDN UMD load failed', e);
   }
-
   console.error('[FFmpeg] all strategies failed to resolve usable FFmpeg API');
   return null;
 }
@@ -369,7 +364,7 @@ function coerceModuleToUnified(mod: any): FFmpegUnified | null {
     const ff: FFmpegClassic = createFFmpeg({
       log: false,
       worker: false,
-      corePath: corePathFromBase(),
+      corePath: corePathFromBase(), // public/ffmpeg/ffmpeg-core.js 前提
     });
     return {
       async load() { if (!ff.isLoaded()) await ff.load(); },
@@ -415,71 +410,73 @@ export async function encodeVideoWithMeta(
 ): Promise<{ blob: Blob; filename: string; mime: Mime }> {
   if (!frames?.length) throw new Error('encodeVideo: frames is empty');
 
-  // 端末互換優先：iOS/Android は mp4 を第一候補
   const primary: Mime = preferredMime ?? getPreferredMimeType();
   const secondary: Mime = altPreferred(primary);
 
-  // ffmpeg でまず primary を試す。小さすぎ/失敗なら secondary。
+  // 1) ffmpeg（単一JPEGルート）→ NG なら MR に切替
   try {
-    const blob = await encodeWithFFmpeg(frames, fps, primary);
+    const blob = await encodeWithFFmpegLoop(frames, fps, primary);
     if (blob.size >= MIN_VALID_SIZE) {
       const mime = (blob.type || primary) as Mime;
       const filename = mime === 'video/mp4' ? 'output.mp4' : 'output.webm';
       return { blob, filename, mime };
     }
-    console.warn('[Encode] FFmpeg output too small, switching mime...');
-    const blob2 = await encodeWithFFmpeg(frames, fps, secondary);
-    const mime2 = (blob2.type || secondary) as Mime;
-    const filename2 = mime2 === 'video/mp4' ? 'output.mp4' : 'output.webm';
-    return { blob: blob2, filename: filename2, mime: mime2 };
+    console.warn('[Encode] FFmpeg output too small, fallback to MediaRecorder…');
   } catch (e1) {
     console.warn(`ffmpeg.wasm failed with ${primary}`, e1);
-    const blob = await encodeWithFFmpeg(frames, fps, secondary);
-    const mime = (blob.type || secondary) as Mime;
-    const filename = mime === 'video/mp4' ? 'output.mp4' : 'output.webm';
-    return { blob, filename, mime };
   }
+
+  // 2) MediaRecorder フォールバック（実機互換対策）
+  try {
+    const mr = await import('./mediarec');
+    const blob = await mr.encodeWithMediaRecorder(
+      // cv.Mat ベースの経路が上流にある前提（toDrawableは mediarec 側で不要）
+      (frames as unknown) as any, fps, primary
+    );
+    const mime = (blob.type || primary) as Mime;
+    const filename = mime === 'video/mp4' ? 'output.mp4' : 'output.webm';
+    if (blob.size >= MIN_VALID_SIZE) return { blob, filename, mime };
+  } catch (e2) {
+    console.warn('[Encode] MediaRecorder fallback failed', e2);
+  }
+
+  // 3) 最後の手段：別MIMEで ffmpeg をもう一度（単一JPEGルート）
+  const blob = await encodeWithFFmpegLoop(frames, fps, secondary);
+  const mime = (blob.type || secondary) as Mime;
+  const filename = mime === 'video/mp4' ? 'output.mp4' : 'output.webm';
+  return { blob, filename, mime };
 }
 
-/* ---------------- encode 実装（API差分を吸収） ---------------- */
+/* ---------------- ffmpeg 単一JPEGルート（FSエラー回避） ---------------- */
 
-async function encodeWithFFmpeg(
+async function encodeWithFFmpegLoop(
   frames: AnyFrame[],
   fps: number,
   target: Mime,
 ): Promise<Blob> {
   const ff = await getFFmpegUnified();
   if (!ff) throw new Error('ffmpeg-unavailable');
-
   await ff.load();
 
-  // 解像度決め
+  // 入力の先頭フレームを drawable に
   const firstDrawable = await toDrawable(frames[0] as any, { width: 720, height: 1280 });
   const { width, height } = detectSize(firstDrawable as any);
 
-  // --- 短尺対策：最小 1 秒ぶんのフレーム数まで複製 ---
-  const minFrames = Math.max(2, Math.round(Math.max(1, fps) * MIN_DURATION_SEC));
-  const cappedLen = Math.min(Math.max(frames.length, minFrames), MAX_FRAMES_HARD);
+  // 1枚だけ JPEG にして書き込む（仮想FS負荷を最小化）
+  const jpg = await canvasSourceToJpegBytes(firstDrawable as any, width, height, 0.8);
+  await ff.write('frame.jpg', jpg);
 
-  // 連番JPEGを書き出し（PNGより大幅に軽く、FS error 回避）
-  for (let i = 0; i < cappedLen; i++) {
-    const srcIdx = Math.min(i, frames.length - 1);
-    // eslint-disable-next-line no-await-in-loop
-    const drawable = await toDrawable(frames[srcIdx] as any, { width, height });
-    // eslint-disable-next-line no-await-in-loop
-    const jpg = await canvasSourceToJpegBytes(drawable as any, width, height, 0.75);
-    const name = `frame_${String(i).padStart(5, '0')}.jpg`;
-    // eslint-disable-next-line no-await-in-loop
-    await ff.write(name, jpg);
-  }
+  // 最小尺を強制（fpsが低すぎても 1s に）
+  const duration = Math.max(MIN_DURATION_SEC, (frames.length / Math.max(1, fps)));
 
-  // 出力設定（再生互換最優先：mp4 は H.264 Baseline + yuv420p + faststart）
   const out = target === 'video/webm' ? 'out.webm' : 'out.mp4';
   const args =
     target === 'video/webm'
       ? [
+          '-loop', '1',
+          '-t', String(duration),
           '-framerate', String(fps),
-          '-i', 'frame_%05d.jpg',
+          '-i', 'frame.jpg',
           '-c:v', 'libvpx-vp8',
           '-b:v', '2M',
           '-pix_fmt', 'yuv420p',
@@ -487,8 +484,10 @@ async function encodeWithFFmpeg(
           out
         ]
       : [
+          '-loop', '1',
+          '-t', String(duration),
           '-framerate', String(fps),
-          '-i', 'frame_%05d.jpg',
+          '-i', 'frame.jpg',
           '-c:v', 'libx264',
           '-profile:v', 'baseline',
           '-level', '3.1',
@@ -505,19 +504,21 @@ async function encodeWithFFmpeg(
   await ff.exec(args);
   const data: Uint8Array = await ff.read(out);
 
+  // 片付け（失敗しても無視）
+  try { await ff.exec(['-y', '-i', 'frame.jpg', '-f', 'null', '-']); } catch {}
+
   const mime = target === 'video/webm' ? 'video/webm' : 'video/mp4';
-  const ab = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
-  return new Blob([ab], { type: mime });
+  // ★ 安定策：data.buffer ではなく data をそのまま Blob へ（既知の互換対策）:contentReference[oaicite:1]{index=1}
+  return new Blob([data], { type: mime });
 }
 
-/* ---------------- 画像→JPEG/PNG バイト列 ---------------- */
+/* ---------------- 画像→JPEG バイト列 ---------------- */
 
-// JPEG（推奨）：toBlob を使ってメモリ節約＆高速化
 async function canvasSourceToJpegBytes(
   src: CanvasImageSource,
   width: number,
   height: number,
-  quality = 0.75
+  quality = 0.8
 ): Promise<Uint8Array> {
   const c = document.createElement('canvas');
   c.width = width; c.height = height;
@@ -529,20 +530,6 @@ async function canvasSourceToJpegBytes(
   });
   const buf = await blob.arrayBuffer();
   return new Uint8Array(buf);
-}
-
-// PNG（フォールバック用：未使用だが残置）
-function canvasSourceToPng(src: CanvasImageSource, width: number, height: number): Uint8Array {
-  const c = document.createElement('canvas');
-  c.width = width; c.height = height;
-  const ctx = c.getContext('2d');
-  if (!ctx) throw new Error('2D context unavailable');
-  ctx.drawImage(src as any, 0, 0, width, height);
-  const dataUrl = c.toDataURL('image/png');
-  const bin = atob(dataUrl.split(',')[1]);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
 }
 
 function detectSize(src: any): { width: number; height: number } {
