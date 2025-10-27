@@ -20,11 +20,10 @@ export default defineConfig({
           "**/*ort-*.wasm",
           "ffmpeg/**",
           "**/*opencv*.wasm",
-          "**/*.wasm", // 念のため、その他の wasm も precache 対象外
-          "**/mediarec-*.js" // opencv.js を含む巨大チャンクを除外
+          "**/*.wasm" // 念のため、その他の wasm も precache 対象外
         ],
-        // （必要なら）上限は控えめのままでもよい
-        maximumFileSizeToCacheInBytes: 10 * 1024 * 1024
+        // 巨大チャンクはなくなったので上限を5MBに戻す
+        maximumFileSizeToCacheInBytes: 5 * 1024 * 1024
       }
     }),
     viteStaticCopy({

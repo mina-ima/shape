@@ -1,10 +1,9 @@
 // src/encode/mediarec.ts
-import cv from "@techstark/opencv-js";
 
 /**
- * MediaRecorder で cv.Mat[] を動画化して Blob を返す。
- * - HTMLCanvasElement.captureStream(fps) を優先（OffscreenCanvas は互換に難があるため録画には使わない）
- * - cv.imshow で 1/FPS ごとに確実に描画し、描画フラッシュを await で担保
+ * MediaRecorder でフレーム配列を動画化して Blob を返す。
+ * - HTMLCanvasElement.captureStream(fps) を優先（OffscreenCanvas は互換性に難があるため録画には使わない）
+ * - ImageData/putImageData で 1/FPS ごとに描画し、描画フラッシュを await で担保
  * - timeslice ありで dataavailable を安定化
  * - UA が実際に吐いた MIME（dataavailable.type 等）を採用
  * - MP4 の互換性向上のため無音オーディオトラックを合成（Android 標準系対策）
@@ -14,8 +13,15 @@ import cv from "@techstark/opencv-js";
 export type TargetMime = "video/webm" | "video/mp4";
 const MIN_VALID_SIZE = 64 * 1024; // 64KB 未満は破損/短尺とみなす
 
+// cv.Mat の代替（imshow に必要な情報のみ）
+interface MiniMat {
+  data: Uint8ClampedArray;
+  cols: number;
+  rows: number;
+}
+
 export async function encodeWithMediaRecorder(
-  frames: cv.Mat[],
+  frames: MiniMat[],
   fps: number,
   target: TargetMime,
 ): Promise<Blob> {
@@ -32,9 +38,9 @@ export async function encodeWithMediaRecorder(
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("2D context not available");
 
-  // OpenCV の imshow は OffscreenCanvas でも動く環境があるが、
-  // captureStream の互換が低いため「描画はこの canvas に直接行う」方針に統一。
   const resolvedMime = pickMediaRecorderMime(target) ?? target;
 
   // --- captureStream（動画トラック作成） ---
@@ -118,10 +124,11 @@ export async function encodeWithMediaRecorder(
   recorder.start(200);
   await startPromise;
 
-  // --- 描画ユーティリティ ---
-  const drawFrame = (mat: cv.Mat) => {
-    // OpenCV.js は RGBA/BGR を内部で処理して imshow する
-    (cv as any).imshow(canvas as any, mat);
+  // --- 描画ユーティリティ (脱-OpenCV) ---
+  const drawFrame = (mat: MiniMat) => {
+    // MiniMat から ImageData を作って描画
+    const imageData = new ImageData(mat.data, mat.cols, mat.rows);
+    ctx.putImageData(imageData, 0, 0);
   };
 
   const frameInterval = Math.max(4, Math.round(1000 / Math.max(1, fps)));
