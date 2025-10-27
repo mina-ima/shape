@@ -230,7 +230,6 @@ export async function generateParallaxFrames(
       frameAlpha.convertTo(frameAlpha, -1, fadeAlpha);
       cv.merge(framePlanes, warpedBgRgba);
       framePlanes.delete();
-      frameAlpha.delete(); // ★ alpha も delete
     }
 
     // ★ cv.Mat ではなく、安全なプレーンオブジェクトを配列に格納
