@@ -20,7 +20,8 @@ export default defineConfig({
           "**/*ort-*.wasm",
           "ffmpeg/**",
           "**/*opencv*.wasm",
-          "**/*.wasm" // 念のため、その他の wasm も precache 対象外
+          "**/*.wasm", // 念のため、その他の wasm も precache 対象外
+          "**/mediarec-*.js" // opencv.js を含む巨大チャンクを除外
         ],
         // （必要なら）上限は控えめのままでもよい
         maximumFileSizeToCacheInBytes: 10 * 1024 * 1024
