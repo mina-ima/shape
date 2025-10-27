@@ -1,5 +1,5 @@
 // src/compose/parallax.ts
-import getCV from "@/lib/cv";
+import getCV from "@/lib/opencv-loader";
 
 /**
  * 入力の各レイヤから前景(RGBA)と背景(RGB)を生成
