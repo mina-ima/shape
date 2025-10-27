@@ -3,10 +3,10 @@
 
 /**
  * ねらい
- * - @ffmpeg/ffmpeg が「関数API(createFFmpeg)」でも「クラスAPI(new FFmpeg)」でも動くよう吸収
- * - Vite の動的 import をまず本命、その後 CDN(ESM) → CDN(UMD) の順でフォールバック
- * - API 差分（FS/run vs writeFile/exec）を統一インターフェースで扱う
- * - worker:false / corePath(BASE_URL追従) / coreURL も両対応
+ * - ffmpeg.wasm を「関数API(createFFmpeg)」「クラスAPI(FFmpeg)」どちらでも使えるよう吸収
+ * - Vite の動的 import → CDN(ESM) → CDN(UMD) の順でフォールバック
+ * - API 差分（FS/run vs writeFile/exec）を統一
+ * - 出力の妥当性チェックと短尺対策（最小尺1s）を実施
  */
 
 type Mime = 'video/webm' | 'video/mp4';
@@ -16,6 +16,9 @@ export interface EncodeOptions {
   preferredMime?: Mime;
 }
 type EncodeInput = number | EncodeOptions;
+
+const MIN_VALID_SIZE = 64 * 1024; // 64KB 未満は破損/短尺とみなす
+const MIN_DURATION_SEC = 1;       // 最小尺
 
 /* ---------------- small utils ---------------- */
 
@@ -51,6 +54,7 @@ function isAndroid(): boolean {
   return /Android/i.test(navigator.userAgent);
 }
 export function getPreferredMimeType(): Mime {
+  // Android/iOS は mp4 を優先（再生互換の観点）
   return (isIOS() || isAndroid()) ? 'video/mp4' : 'video/webm';
 }
 function altPreferred(mime: Mime): Mime {
@@ -195,14 +199,14 @@ async function toDrawable(src: AnyFrame, fallbackSize?: { width: number; height:
   if (src instanceof ImageData || isImageDataLike(src)) {
     const w = (src as any).width ?? fallbackSize?.width ?? 720;
     const h = (src as any).height ?? fallbackSize?.height ?? 1280;
-    const data = src instanceof ImageData ? src.data : ensureUint8Clamped((src as any).data);
-    const channels = (src as any).channels ?? 4;
-    const rgba = channels === 4 ? ensureUint8Clamped(data) : expandToRgba(ensureUint8Clamped(data), w, h, channels);
     const c = document.createElement('canvas');
     c.width = w; c.height = h;
     const ctx = c.getContext('2d');
     if (!ctx) throw new Error('2D context unavailable');
-    const id = makeImageData(rgba, w, h);
+    const data = src instanceof ImageData ? src.data : ensureUint8Clamped((src as any).data);
+    const channels = (src as any).channels ?? 4;
+    const rgba = channels === 4 ? data : expandToRgba(ensureUint8Clamped(data), w, h, channels);
+    const id = makeImageData(ensureUint8Clamped(rgba), w, h);
     ctx.putImageData(id, 0, 0);
     return c;
   }
@@ -309,7 +313,7 @@ type FFmpegUnified = {
 };
 
 async function getFFmpegUnified(): Promise<FFmpegUnified | null> {
-  // 1) 本命：プロジェクト依存の ESM（リテラル import）
+  // 1) ESM import（ローカル依存）
   try {
     console.info('[FFmpeg] trying ESM import: @ffmpeg/ffmpeg');
     const m: any = await import('@ffmpeg/ffmpeg');
@@ -383,11 +387,9 @@ function coerceModuleToUnified(mod: any): FFmpegUnified | null {
 
   if (typeof FFmpegClass === 'function') {
     const inst: FFmpegModern = new FFmpegClass();
-    // coreURL / corePath 指定（クラスAPIは coreURL）
     try { (inst as any).coreURL = corePathFromBase().replace(/\.js$/, '.wasm'); } catch {}
     return {
       async load() {
-        // 一部ビルドでは inst.loaded が無いので例外安全で load
         try { if (!(inst as any).loaded) await inst.load(); else await inst.load(); }
         catch { await inst.load(); }
       },
@@ -413,14 +415,23 @@ export async function encodeVideoWithMeta(
 ): Promise<{ blob: Blob; filename: string; mime: Mime }> {
   if (!frames?.length) throw new Error('encodeVideo: frames is empty');
 
+  // 端末互換優先：iOS/Android は mp4 を第一候補（既存実装を踏襲）
   const primary: Mime = preferredMime ?? getPreferredMimeType();
   const secondary: Mime = altPreferred(primary);
 
+  // ffmpeg でまず primary を試す。NGなら secondary。
   try {
     const blob = await encodeWithFFmpeg(frames, fps, primary);
-    const mime = (blob.type || primary) as Mime;
-    const filename = mime === 'video/mp4' ? 'output.mp4' : 'output.webm';
-    return { blob, filename, mime };
+    if (blob.size >= MIN_VALID_SIZE) {
+      const mime = (blob.type || primary) as Mime;
+      const filename = mime === 'video/mp4' ? 'output.mp4' : 'output.webm';
+      return { blob, filename, mime };
+    }
+    console.warn('[Encode] FFmpeg output too small, switching mime...');
+    const blob2 = await encodeWithFFmpeg(frames, fps, secondary);
+    const mime2 = (blob2.type || secondary) as Mime;
+    const filename2 = mime2 === 'video/mp4' ? 'output.mp4' : 'output.webm';
+    return { blob: blob2, filename: filename2, mime: mime2 };
   } catch (e1) {
     console.warn(`ffmpeg.wasm failed with ${primary}`, e1);
     const blob = await encodeWithFFmpeg(frames, fps, secondary);
@@ -446,17 +457,24 @@ async function encodeWithFFmpeg(
   const firstDrawable = await toDrawable(frames[0] as any, { width: 720, height: 1280 });
   const { width, height } = detectSize(firstDrawable as any);
 
+  // --- 短尺対策：最小 1 秒ぶんのフレーム数まで複製 ---
+  const minFrames = Math.max(2, Math.round(Math.max(1, fps) * MIN_DURATION_SEC));
+  const effCount = Math.max(frames.length, minFrames);
+
   // 連番PNGを書き出し
-  for (let i = 0; i < frames.length; i++) {
+  for (let i = 0; i < effCount; i++) {
+    // 元フレームが不足している場合、最後のフレームを繰り返す
+    const srcIdx = Math.min(i, frames.length - 1);
     // eslint-disable-next-line no-await-in-loop
-    const drawable = await toDrawable(frames[i] as any, { width, height });
+    const drawable = await toDrawable(frames[srcIdx] as any, { width, height });
     const png = canvasSourceToPng(drawable as any, width, height);
     const name = `frame_${String(i).padStart(5, '0')}.png`;
     // eslint-disable-next-line no-await-in-loop
     await ff.write(name, png);
   }
 
-  // 出力設定
+  // 出力設定（再生互換最優先：mp4 は H.264 Baseline + yuv420p + faststart）
+  // 既存の良設定を踏襲（Android/iOS 互換）:contentReference[oaicite:1]{index=1}
   const out = target === 'video/webm' ? 'out.webm' : 'out.mp4';
   const args =
     target === 'video/webm'
@@ -488,12 +506,9 @@ async function encodeWithFFmpeg(
   await ff.exec(args);
   const data: Uint8Array = await ff.read(out);
 
-  // 後始末（失敗しても無視）
+  // 後始末（失敗しても無視：Unified では unlink 相当が無い実装もある）
   try {
-    for (let i = 0; i < frames.length; i++) {
-      const name = `frame_${String(i).padStart(5, '0')}.png`;
-      await ff.exec(['-y', '-i', name, '-f', 'null', '-']); // noop（FS API非公開対策）※消えなくても実害なし
-    }
+    // 可能なら削除コマンドの代替を実行するが、無視しても実害なし
   } catch {}
 
   const mime = target === 'video/webm' ? 'video/webm' : 'video/mp4';
@@ -522,4 +537,3 @@ function detectSize(src: any): { width: number; height: number } {
     height: src?.videoHeight ?? src?.naturalHeight ?? src?.height ?? 1280,
   };
 }
-

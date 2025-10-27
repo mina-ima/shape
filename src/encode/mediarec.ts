@@ -3,11 +3,12 @@ import cv from "@techstark/opencv-js";
 
 /**
  * MediaRecorder で cv.Mat[] を動画化して Blob を返す。
- * - Canvas.captureStream(fps) を使用（OffscreenCanvas対応）
- * - cv.imshow で 1/FPS ごとに確実に描画
+ * - HTMLCanvasElement.captureStream(fps) を優先（OffscreenCanvas は互換に難があるため録画には使わない）
+ * - cv.imshow で 1/FPS ごとに確実に描画し、描画フラッシュを await で担保
  * - timeslice ありで dataavailable を安定化
  * - UA が実際に吐いた MIME（dataavailable.type 等）を採用
  * - MP4 の互換性向上のため無音オーディオトラックを合成（Android 標準系対策）
+ * - 出力が小さすぎる場合（<64KB）はフォールバックを促すため例外
  */
 
 export type TargetMime = "video/webm" | "video/mp4";
@@ -23,51 +24,40 @@ export async function encodeWithMediaRecorder(
   }
   if (!frames?.length) throw new Error("No frames provided.");
 
-  const width = frames[0].cols;
-  const height = frames[0].rows;
+  const width = frames[0].cols | 0;
+  const height = frames[0].rows | 0;
   if (!width || !height) throw new Error("Invalid frame size.");
 
-  // Canvas（OffscreenCanvas があれば優先）
-  const hasOffscreen = typeof OffscreenCanvas !== "undefined";
-  const canvas: HTMLCanvasElement | OffscreenCanvas = hasOffscreen
-    ? new OffscreenCanvas(width, height)
-    : (document.createElement("canvas") as HTMLCanvasElement);
+  // --- 録画用キャンバス：HTMLCanvasElement を必ず使用（互換性重視） ---
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
 
-  (canvas as any).width = width;
-  (canvas as any).height = height;
-
-  // captureStream（動画トラック）
-  const baseStream: MediaStream =
-    (canvas as any).captureStream?.(fps) ??
-    (canvas as HTMLCanvasElement).captureStream?.(fps);
-  if (!baseStream) throw new Error("Canvas.captureStream() is not supported.");
-
-  // 端末互換の MIME を再解決（target を最優先しつつ候補から選択）
+  // OpenCV の imshow は OffscreenCanvas でも動く環境があるが、
+  // captureStream の互換が低いため「描画はこの canvas に直接行う」方針に統一。
   const resolvedMime = pickMediaRecorderMime(target) ?? target;
 
-  // ---- MP4 の互換性対策：無音オーディオトラックを合成（音声必須系プレイヤー対策）----
+  // --- captureStream（動画トラック作成） ---
+  const baseStream: MediaStream = (canvas as any).captureStream?.(fps) ?? canvas.captureStream();
+  if (!baseStream) throw new Error("Canvas.captureStream() is not supported.");
+
+  // ---- MP4 対策：無音オーディオトラックを合成（音声必須プレイヤー向け）----
   let mixedStream: MediaStream = baseStream;
   let cleanupAudio: (() => void) | undefined;
   if (resolvedMime.startsWith("video/mp4")) {
     try {
-      const AC: typeof AudioContext =
-        (window as any).AudioContext || (window as any).webkitAudioContext;
+      const AC: typeof AudioContext = (window as any).AudioContext || (window as any).webkitAudioContext;
       if (AC) {
         const ac = new AC();
-        // 極小音（実質無音）を発生させて MediaStream に流す
         const osc = ac.createOscillator();
         const gain = ac.createGain();
-        gain.gain.value = 0.00001; // 無音レベル
+        gain.gain.value = 0.00001; // 実質無音
         osc.connect(gain);
         const dest = ac.createMediaStreamDestination();
         gain.connect(dest);
-
-        // 再生系へは出さない（デバイス出力に繋がない）
         const audioTracks = dest.stream.getAudioTracks();
         mixedStream = new MediaStream([...baseStream.getVideoTracks(), ...audioTracks]);
-
-        try { osc.start(); } catch { /* 二重 start 安全策 */ }
-
+        try { osc.start(); } catch {}
         cleanupAudio = () => {
           try { osc.stop(); } catch {}
           try { audioTracks.forEach(t => t.stop()); } catch {}
@@ -75,11 +65,11 @@ export async function encodeWithMediaRecorder(
         };
       }
     } catch {
-      // 失敗しても致命ではない（音声なしで続行）
+      // 音声なしでも続行
     }
   }
 
-  // MediaRecorder 準備（ビットレートを明示）
+  // --- MediaRecorder 準備 ---
   const options: MediaRecorderOptions = {
     mimeType: isTypeSupportedSafe(resolvedMime) ? resolvedMime : undefined,
     videoBitsPerSecond: 4_000_000,
@@ -90,7 +80,6 @@ export async function encodeWithMediaRecorder(
   try {
     recorder = new MediaRecorder(mixedStream, options);
   } catch {
-    // UA に任せる（mimeType 無指定で再トライ）
     recorder = new MediaRecorder(mixedStream);
   }
 
@@ -111,15 +100,13 @@ export async function encodeWithMediaRecorder(
     });
     recorder.addEventListener("stop", () => {
       try {
-        // **重要**: UA が実際に吐いた type を最優先で採用
         const effectiveType =
           detectedType ||
           (recorder as any).mimeType ||
           (options as any).mimeType ||
           target;
 
-        const blob = new Blob(chunks, { type: effectiveType });
-        resolve(blob);
+        resolve(new Blob(chunks, { type: effectiveType }));
       } catch (e) {
         reject(e);
       }
@@ -127,40 +114,57 @@ export async function encodeWithMediaRecorder(
     recorder.addEventListener("error", (e: any) => reject(e?.error ?? e));
   });
 
-  // timeslice ありで開始（200msごとに dataavailable。mux 安定＆短尺対策）
+  // timeslice ありで開始（200ms ごとに dataavailable→mux 安定）
   recorder.start(200);
   await startPromise;
 
-  // 描画: cv.imshow を使う（RGBA→描画を内部で処理）
+  // --- 描画ユーティリティ ---
   const drawFrame = (mat: cv.Mat) => {
-    (cv as any).imshow(canvas as any, mat); // Offscreen/HTMLCanvas 両対応
+    // OpenCV.js は RGBA/BGR を内部で処理して imshow する
+    (cv as any).imshow(canvas as any, mat);
   };
 
   const frameInterval = Math.max(4, Math.round(1000 / Math.max(1, fps)));
 
-  // 1/FPS ごとに確実に 1 フレームずつ描く
+  // ★ 先行フレーム：ストリームが空で始まらないように数フレーム暖機
+  for (let i = 0; i < Math.min(2, frames.length); i++) {
+    drawFrame(frames[i]);
+    // DOM 反映フラッシュ（Android での書き込み遅延対策）
+    // eslint-disable-next-line no-await-in-loop
+    await flushPaint();
+  }
+
+  // --- 本描画：1/FPS ごとに 1 フレーム ---
   for (let i = 0; i < frames.length; i++) {
     drawFrame(frames[i]);
     // eslint-disable-next-line no-await-in-loop
     await wait(frameInterval);
+    // 低速端末での描画取りこぼし回避（描画フラッシュ）
+    // eslint-disable-next-line no-await-in-loop
+    await flushPaint();
   }
 
-  // Mux 終端安定のため 1 フレーム分待つ（最終タイムスタンプが 0 扱い防止）
-  await wait(frameInterval);
+  // --- 終端の“余韻フレーム”で mux の最終タイムスタンプを安定化 ---
+  for (let i = 0; i < 2; i++) {
+    // 最終フレームを繰り返し
+    drawFrame(frames[frames.length - 1]);
+    // eslint-disable-next-line no-await-in-loop
+    await wait(frameInterval);
+  }
 
   // ★停止前フラッシュ：最終チャンクを書き出させる
   try { recorder.requestData(); } catch {}
-  await wait(Math.max(200, frameInterval * 2)); // flush を待つ（端末差を吸収）
+  await wait(Math.max(200, frameInterval * 2));
 
   // 停止して Blob を取得
   if (recorder.state !== "inactive") recorder.stop();
   const blob = await resultPromise;
 
-  // クリーンアップ
+  // 後始末
   mixedStream.getTracks().forEach((t) => t.stop());
   try { cleanupAudio?.(); } catch {}
 
-  // 極小（= ヘッダのみ/断片のみ）の検出。小さすぎる場合は上位フォールバック
+  // 小さすぎる（ヘッダのみ/断片的）場合は上位フォールバックへ
   if (!blob || blob.size < MIN_VALID_SIZE) {
     throw new Error(`Recorded blob is too small (${blob?.size ?? 0} bytes).`);
   }
@@ -170,25 +174,27 @@ export async function encodeWithMediaRecorder(
 
 /* ---------------- ユーティリティ ---------------- */
 
-// UAごとの最適候補（Androidは webm 優先、iOS/Safari 系は mp4 を含む）
-// target を最優先しつつ、互換候補も試す
+// UAごとの最適候補（Android は webm 優先、iOS/Safari 系は mp4 も）
 function pickMediaRecorderMime(target: TargetMime): string | undefined {
+  // MediaRecorder は実装差が大きいため、実録画は webm 優先が安定。
+  // target は尊重しつつ、候補列を調整。
   const preferFirst: string[] =
     target === "video/webm"
       ? [
-          "video/webm;codecs=vp8,opus",
           "video/webm;codecs=vp9,opus",
+          "video/webm;codecs=vp8,opus",
+          "video/webm;codecs=vp9",
           "video/webm;codecs=vp8",
           "video/webm",
-          "video/mp4;codecs=avc1.42E01E,mp4a.40.2", // 最後に MP4 も試す（iOS 向け）
+          "video/mp4;codecs=avc1.42E01E,mp4a.40.2",
           "video/mp4",
         ]
       : [
           "video/mp4;codecs=avc1.42E01E,mp4a.40.2",
           "video/mp4",
-          // Android では mp4 非対応のことがあるため WebM も候補に入れて救済
-          "video/webm;codecs=vp8,opus",
+          // Android では mp4 未対応実装もあるため WebM も候補に入れる
           "video/webm;codecs=vp9,opus",
+          "video/webm;codecs=vp8,opus",
           "video/webm",
         ];
 
@@ -209,4 +215,12 @@ function isTypeSupportedSafe(mime: string): boolean {
 
 function wait(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+// 描画反映を 1 フレーム遅延させる（Android でのキャンバス→トラック反映遅延に対応）
+async function flushPaint(): Promise<void> {
+  await new Promise<void>((r) => {
+    // requestAnimationFrame を 1 回挟んでから microtask
+    requestAnimationFrame(() => Promise.resolve().then(() => r()));
+  });
 }
