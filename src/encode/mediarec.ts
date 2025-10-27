@@ -16,8 +16,8 @@ const MIN_VALID_SIZE = 64 * 1024; // 64KB 未満は破損/短尺とみなす
 // cv.Mat の代替（imshow に必要な情報のみ）
 interface MiniMat {
   data: Uint8ClampedArray;
-  cols: number;
-  rows: number;
+  width: number;
+  height: number;
 }
 
 export async function encodeWithMediaRecorder(
@@ -30,8 +30,8 @@ export async function encodeWithMediaRecorder(
   }
   if (!frames?.length) throw new Error("No frames provided.");
 
-  const width = frames[0].cols | 0;
-  const height = frames[0].rows | 0;
+  const width = frames[0].width | 0;
+  const height = frames[0].height | 0;
   if (!width || !height) throw new Error("Invalid frame size.");
 
   // --- 録画用キャンバス：HTMLCanvasElement を必ず使用（互換性重視） ---
@@ -129,7 +129,7 @@ export async function encodeWithMediaRecorder(
     // TS2769ビルドエラー対策: mat.dataがSharedArrayBufferを持つ可能性を考慮し、
     // new Uint8ClampedArray() で標準バッファにコピーしてからImageDataを生成する。
     const safeData = new Uint8ClampedArray(mat.data);
-    const imageData = new ImageData(safeData, mat.cols, mat.rows);
+    const imageData = new ImageData(safeData, mat.width, mat.height);
     ctx.putImageData(imageData, 0, 0);
   };
 
