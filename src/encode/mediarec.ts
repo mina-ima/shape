@@ -126,8 +126,10 @@ export async function encodeWithMediaRecorder(
 
   // --- 描画ユーティリティ (脱-OpenCV) ---
   const drawFrame = (mat: MiniMat) => {
-    // MiniMat から ImageData を作って描画
-    const imageData = new ImageData(mat.data, mat.cols, mat.rows);
+    // TS2769ビルドエラー対策: mat.dataがSharedArrayBufferを持つ可能性を考慮し、
+    // new Uint8ClampedArray() で標準バッファにコピーしてからImageDataを生成する。
+    const safeData = new Uint8ClampedArray(mat.data);
+    const imageData = new ImageData(safeData, mat.cols, mat.rows);
     ctx.putImageData(imageData, 0, 0);
   };
 
