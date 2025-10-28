@@ -15,6 +15,10 @@ import {
 import { buildEmergeDrawer } from "../compose/emerge_draw";
 import { encodeWithMediaRecorderDraw } from "../encode/mediarec";
 
+// ★ 追加：色ユーティリティ＆Theme型
+import { averageColorOfRGB, averageColorOfImage, adjustHsl, mixRGB } from "../lib/color";
+import type { Theme } from "../compose/emerge_draw";
+
 export const MAX_RETRIES = 3;
 
 type Status = "idle" | "processing" | "success" | "error";
@@ -242,6 +246,8 @@ export const useStore = create<AppState>((set, get) => ({
         // 6) 類似画像取得（あれば emerge ルート、ダメなら parallax）
         let useEmerge = false;
         let similarImage: HTMLImageElement | null = null;
+        // ★ テーマ（後でdrawerに渡す）
+        let theme: Theme | undefined = undefined;
 
         if (unsplashApiKey) {
           try {
@@ -251,6 +257,16 @@ export const useStore = create<AppState>((set, get) => ({
             similarImage = image;
             useEmerge = true;
             console.log("[Store] similar image fetched.");
+
+            // ▼ 追記: 入力RGBとsimilar画像からテーマ色を作る（色反映のキモ）
+            const srcAvg = averageColorOfRGB(originalRGB, inputImage.width, inputImage.height, 12); // 入力の平均色（軽量サンプリング）
+            const simAvg = averageColorOfImage(similarImage);                                      // 類似画像の平均色
+            const bgTop    = adjustHsl(mixRGB(srcAvg, simAvg, 0.3), -0.05, -0.20); // 上: 少し暗く/低彩度
+            const bgBottom = adjustHsl(mixRGB(srcAvg, simAvg, 0.6), -0.05, -0.05); // 下: やや明るめ
+            const accent   = adjustHsl(simAvg, +0.10, +0.10);                      // 光: 類似画像ベースで少し明るく
+            const tint     = mixRGB(simAvg, srcAvg, 0.5);                          // 被写体ティント: 両者の中間
+
+            theme = { bg1: bgTop, bg2: bgBottom, accent, subjectTint: tint };
           } catch (e) {
             console.warn("[Store] similar fetch failed, fallback to parallax.", e);
           }
@@ -272,7 +288,8 @@ export const useStore = create<AppState>((set, get) => ({
             resizedMask,         // 1ch mask
             similarImage,        // 類似画像
             inputImage.width, inputImage.height,
-            duration, fps
+            duration, fps,
+            theme                // ★ 色テーマを渡す
           );
 
           console.log("[Store] encode (stream)...");
