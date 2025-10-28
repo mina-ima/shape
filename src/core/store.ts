@@ -202,17 +202,17 @@ export const useStore = create<AppState>((set, get) => ({
   _setError: (msg) => set({ status: "error", error: msg }),
 
   startProcessFlow: async (inputImage: ImageBitmap) => {
-    console.log("startProcessFlow called.");
-    const { unsplashApiKey } = get();
+    console.log("[Store] startProcessFlow called.");
 
+    // ★ 修正点：Unsplash API Key が無くてもカメラ／ローカル画像の処理は続行できるようにする。
+    //   Unsplash ダウンロードを行う別フローでのみキーを要求する設計に変更。
+    const { unsplashApiKey } = get();
     if (!unsplashApiKey) {
-      set({ status: "error", error: "Unsplash API Key is missing" });
-      console.log("startProcessFlow: API Key missing.");
-      return;
+      console.log("[Store] Unsplash API Key is not set. Proceeding without it (camera/local ok).");
     }
 
     set({ status: "processing", error: null });
-    console.log("startProcessFlow: Status set to processing.");
+    console.log("[Store] Status set to processing.");
 
     const nextResolution = (current: number) => {
       if (current >= 720) return 540;
@@ -221,15 +221,18 @@ export const useStore = create<AppState>((set, get) => ({
     };
 
     const attempt = async (resolution: number, attemptNo: number): Promise<void> => {
-      console.log(`Attempt ${attemptNo} started with resolution ${resolution}.`);
+      console.log(`[Store] Attempt ${attemptNo} started with resolution ${resolution}.`);
       try {
         set({ retryCount: attemptNo, processingResolution: resolution });
 
         // 1) 前処理
+        console.log("[Store] preprocess...");
         const processedImage = await processImage(inputImage);
 
         // 2) セグメンテーション
+        console.log("[Store] segmentation...");
         const seg = await runSegmentation(processedImage);
+        console.log("[Store] segmentation done");
 
         // 出力から data/width/height を頑健に解決
         const rawMaskData =
@@ -246,6 +249,7 @@ export const useStore = create<AppState>((set, get) => ({
           320;
 
         // 3) マスクを Uint8 に正規化 → 元画像サイズへ拡大
+        console.log("[Store] resize mask...");
         const maskUint8 = normalizeToUint8(rawMaskData);
         const resizedMask = await resizeMaskToImage(
           maskUint8,
@@ -256,6 +260,7 @@ export const useStore = create<AppState>((set, get) => ({
         );
 
         // 4) 元画像/背景のバイト列を取得し、RGB(3ch)へ
+        console.log("[Store] prepare RGB layers...");
         const origBytesRGBA = normalizeToUint8(await imageBitmapToUint8Array(inputImage));
         const originalRGB = rgbaToRgb(origBytesRGBA, inputImage.width, inputImage.height);
 
@@ -268,6 +273,7 @@ export const useStore = create<AppState>((set, get) => ({
         const backgroundRGB = rgbaToRgb(bgBytesRGBA, bgBitmap.width, bgBitmap.height);
 
         // 5) レイヤ生成（元画像サイズの1chマスク＋RGB3ch画像を渡す）
+        console.log("[Store] generate layers...");
         const { foreground, background } = await generateLayers(
           originalRGB,
           inputImage.width,
@@ -281,7 +287,8 @@ export const useStore = create<AppState>((set, get) => ({
         );
 
         // 6) パララックス → 動画エンコード
-        const fps = 30;          // ★必要なら store に設定項目を追加可
+        console.log("[Store] generate frames...");
+        const fps = 30;          // 必要なら設定化可
         const duration = 5;      // 秒
         const frames = await generateParallaxFrames(
           foreground,
@@ -291,8 +298,10 @@ export const useStore = create<AppState>((set, get) => ({
           duration,
           fps,
         );
+        console.log("[Store] frames ready:", frames.length);
 
         // ---- ここから：エンコードの堅牢化（検証→代替MIME再試行）----
+        console.log("[Store] encode...");
         let meta = await encodeVideoWithMeta(frames, { fps });
         console.log("[Result] first encode:", {
           mime: meta?.mime,
@@ -305,7 +314,7 @@ export const useStore = create<AppState>((set, get) => ({
         const isBlobInvalid = !meta?.blob || meta.blob.size < MIN_BYTES;
 
         if (isBlobInvalid) {
-          console.warn("[encode] Blob too small or empty. Retrying with alternate mime...");
+          console.warn("[Encode] Blob too small or empty. Retrying with alternate mime...");
           const altMime = meta?.mime === "video/mp4" ? "video/webm" : "video/mp4";
           meta = await encodeVideoWithMeta(frames, { fps, preferredMime: altMime });
           console.log("[Result] alt encode:", {
@@ -325,9 +334,10 @@ export const useStore = create<AppState>((set, get) => ({
           generatedVideoMimeType: meta.mime,
           result: { blob: meta.blob, filename: meta.filename, mime: meta.mime },
         });
+        console.log("[Store] encode done: size=", meta.blob.size, "mime=", meta.mime);
 
         set({ status: "success", error: null, retryCount: attemptNo });
-        console.log("Attempt successful.");
+        console.log("[Store] attempt successful.");
         return;
         // ---- ここまで：エンコード堅牢化 ----
       } catch (err) {
@@ -339,7 +349,7 @@ export const useStore = create<AppState>((set, get) => ({
               : typeof err === "string"
                 ? err
                 : "Unknown error";
-        console.log("Error caught in attempt:", message);
+        console.warn("[Store] attempt error:", message);
 
         if (err instanceof CameraPermissionDeniedError) {
           set({ status: "error", error: message, retryCount: attemptNo, result: undefined });
@@ -348,7 +358,7 @@ export const useStore = create<AppState>((set, get) => ({
 
         if (attemptNo >= MAX_RETRIES) {
           set({ status: "error", error: message, retryCount: MAX_RETRIES, result: undefined });
-          console.log("Attempt failed (max retries reached). Status:", get().status);
+          console.log("[Store] attempt failed (max retries reached). Status:", get().status);
           return;
         }
 
@@ -360,7 +370,7 @@ export const useStore = create<AppState>((set, get) => ({
           status: "processing",
           result: undefined,
         });
-        console.log("Attempt failed (retrying). Status:", get().status);
+        console.log("[Store] attempt failed (retrying). Status:", get().status);
 
         await new Promise<void>((resolve) => {
           setTimeout(() => {

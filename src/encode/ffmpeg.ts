@@ -2,17 +2,31 @@
 // ffmpeg.wasm を使ってフレーム列 (cv.Mat[]) を動画 Blob にエンコードする。
 // 希望 MIME（"video/webm" | "video/mp4"）を優先 → 失敗時フォールバック。
 // 互換性重視のパラメータ（CFR, yuv420p, 無音）で出力。
+// 追加: ロード/実行のタイムアウト、極小Blobの失敗扱い、詳細ログ、確実なFS掃除。
 
 import cv from "@techstark/opencv-js";
 import { FFmpeg } from "@ffmpeg/ffmpeg";
 
-/* ---------------- 型安全ユーティリティ ---------------- */
+/* ---------------- ユーティリティ ---------------- */
 
-/** Uint8Array -> ArrayBuffer（ArrayBufferLike を確実に ArrayBuffer に変換） */
+/** Uint8Array -> ArrayBuffer（BlobPartはArrayBufferが安定） */
 function toArrayBuffer(u8: Uint8Array): ArrayBuffer {
   const buf = new ArrayBuffer(u8.byteLength);
   new Uint8Array(buf).set(u8);
   return buf;
+}
+
+/** Promiseにタイムアウトを付ける */
+async function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  let to: any;
+  const timer = new Promise<never>((_, rej) => {
+    to = setTimeout(() => rej(new Error(`[Timeout] ${label} after ${ms}ms`)), ms);
+  });
+  try {
+    return await Promise.race([p, timer]);
+  } finally {
+    clearTimeout(to);
+  }
 }
 
 /** Mat(RGB/RGBA/Gray) → PNG(Uint8Array) へ変換（ffmpeg FS 用）
@@ -126,13 +140,17 @@ export async function encodeWithFFmpeg(
 ): Promise<Blob> {
   if (!frames.length) return new Blob([], { type: mimeType });
 
+  const MIN_VALID_SIZE = 10_000; // 10KB未満は壊れた出力扱い（フォールバック/失敗）
   const wantWebM = mimeType === "video/webm";
   const plans: Array<"webm" | "mp4"> = wantWebM ? ["webm", "mp4"] : ["mp4", "webm"];
 
   const ffmpeg = new FFmpeg();
-  await ffmpeg.load();
+  console.info("[FFmpeg] load() start");
+  await withTimeout(ffmpeg.load(), 60_000, "ffmpeg.load");
+  console.info("[FFmpeg] load() done");
 
   // 入力フレームを書き出し（frame0001.png, frame0002.png, ...）
+  console.info("[FFmpeg] writing frames:", frames.length);
   for (let i = 0; i < frames.length; i++) {
     const png = await matToPngBytes(frames[i]);
     const name = `frame${String(i + 1).padStart(4, "0")}.png`;
@@ -142,25 +160,20 @@ export async function encodeWithFFmpeg(
   const makeWebM = async (): Promise<Blob> => {
     const out = "out.webm";
     const args = [
-      "-framerate",
-      String(fps),
-      "-i",
-      "frame%04d.png",
-      "-c:v",
-      "libvpx-vp8",
-      "-pix_fmt",
-      "yuv420p",
-      "-b:v",
-      "1500k",
-      "-deadline",
-      "realtime",
-      "-row-mt",
-      "1",
+      "-framerate", String(fps),
+      "-i", "frame%04d.png",
+      "-c:v", "libvpx-vp8",
+      "-pix_fmt", "yuv420p",
+      "-b:v", "1500k",
+      "-deadline", "realtime",
+      "-row-mt", "1",
       "-an",
       out,
     ];
-    await ffmpeg.exec(args);
-    const u8 = (await ffmpeg.readFile(out)) as Uint8Array;
+    console.info("[FFmpeg] exec webm start");
+    await withTimeout(ffmpeg.exec(args), 180_000, "ffmpeg.exec webm");
+    console.info("[FFmpeg] exec webm done");
+    const u8 = (await withTimeout(ffmpeg.readFile(out), 30_000, "ffmpeg.readFile webm")) as Uint8Array;
     const ab: ArrayBuffer = toArrayBuffer(u8); // BlobPart は ArrayBuffer を渡す
     return new Blob([ab], { type: "video/webm" });
   };
@@ -168,23 +181,19 @@ export async function encodeWithFFmpeg(
   const makeMP4 = async (): Promise<Blob> => {
     const out = "out.mp4";
     const args = [
-      "-framerate",
-      String(fps),
-      "-i",
-      "frame%04d.png",
-      "-c:v",
-      "libx264",
-      "-profile:v",
-      "baseline",
-      "-pix_fmt",
-      "yuv420p",
-      "-movflags",
-      "+faststart",
+      "-framerate", String(fps),
+      "-i", "frame%04d.png",
+      "-c:v", "libx264",
+      "-profile:v", "baseline",
+      "-pix_fmt", "yuv420p",
+      "-movflags", "+faststart",
       "-an",
       out,
     ];
-    await ffmpeg.exec(args);
-    const u8 = (await ffmpeg.readFile(out)) as Uint8Array;
+    console.info("[FFmpeg] exec mp4 start");
+    await withTimeout(ffmpeg.exec(args), 240_000, "ffmpeg.exec mp4");
+    console.info("[FFmpeg] exec mp4 done");
+    const u8 = (await withTimeout(ffmpeg.readFile(out), 30_000, "ffmpeg.readFile mp4")) as Uint8Array;
     const ab: ArrayBuffer = toArrayBuffer(u8);
     return new Blob([ab], { type: "video/mp4" });
   };
@@ -195,17 +204,24 @@ export async function encodeWithFFmpeg(
     for (const p of plans) {
       try {
         const blob = p === "webm" ? await makeWebM() : await makeMP4();
-        await cleanupFf(fsList(frames.length), ffmpeg);
-        return blob;
+        console.info("[FFmpeg] produced:", p, "size=", blob.size);
+        if (blob.size >= MIN_VALID_SIZE) {
+          await cleanupFf(fsList(frames.length), ffmpeg);
+          return blob;
+        }
+        throw new Error(`Blob too small (${blob.size} bytes)`);
       } catch (e) {
         lastErr = e;
+        console.warn(`[FFmpeg] plan ${p} failed:`, e);
         // 次案にフォールバック
       }
     }
     // libx264 非搭載ビルド対策：最後に WebM を強制再挑戦
     const fallbackBlob = await makeWebM();
+    console.info("[FFmpeg] forced webm size=", fallbackBlob.size);
     await cleanupFf(fsList(frames.length), ffmpeg);
-    return fallbackBlob;
+    if (fallbackBlob.size >= MIN_VALID_SIZE) return fallbackBlob;
+    throw new Error(`Fallback webm too small (${fallbackBlob.size} bytes)`);
   } catch (e) {
     lastErr = e;
     await cleanupFf(fsList(frames.length), ffmpeg);

@@ -3,45 +3,24 @@
 
 /**
  * ねらい
- * - ffmpeg.wasm を安定利用：まず「単一JPEG + -loop 1」で動画化（仮想FSを膨らませない）
- * - それでも NG/極小なら MediaRecorder に即フォールバック（端末依存対策）
- * - ESM/UMD 双方を許容し、corePath は同一オリジン /ffmpeg/ffmpeg-core.js を優先
- * - 出力は H.264 Baseline + yuv420p + +faststart（Android/iOS 再生互換）を維持
+ * - 連番フレーム→ffmpeg.wasm で動画化（本筋）。小サイズ/失敗なら MIME 切替や MediaRecorderへフォールバック。
+ * - フレーム正規化（drawImage 可能化）を徹底。
+ * - 出力は H.264 Baseline + yuv420p + +faststart など再生互換を維持。
+ * - 極小 Blob は失敗扱いでフォールバック（壊れ出力の早期排除）。
  */
 
-type Mime = 'video/webm' | 'video/mp4';
+export type Mime = 'video/webm' | 'video/mp4';
 
 export interface EncodeOptions {
   fps: number;
   preferredMime?: Mime;
 }
-type EncodeInput = number | EncodeOptions;
+export type EncodeInput = number | EncodeOptions;
 
-const MIN_VALID_SIZE = 64 * 1024; // 64KB 未満は不正/極短とみなす
-const MIN_DURATION_SEC = 1;       // 最小尺 1s
+const MIN_VALID_SIZE = 64 * 1024; // 64KB未満は壊れ/極短とみなす（閾値は実運用で採用）
+// 参考: 既存実装でもサイズ検証→フォールバックの方針（要旨）:contentReference[oaicite:3]{index=3}
 
-/* ---------------- small utils ---------------- */
-
-function corePathFromBase(): string {
-  const base = (import.meta as any).env?.BASE_URL ?? '/';
-  return new URL('ffmpeg/ffmpeg-core.js', location.origin + base).pathname;
-}
-async function loadScript(src: string): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const el = document.createElement('script');
-    el.src = src;
-    el.async = true;
-    el.defer = true;
-    el.onload = () => resolve();
-    el.onerror = () => reject(new Error(`script load failed: ${src}`));
-    document.head.appendChild(el);
-  });
-}
-function normalizeOptions(opts: EncodeInput): EncodeOptions {
-  return typeof opts === 'number' ? { fps: opts } : opts;
-}
-
-/* ---------------- 端末判定 & MIME選択 ---------------- */
+/* ---------------- 判定ユーティリティ ---------------- */
 
 function isIOS(): boolean {
   const ua = navigator.userAgent;
@@ -54,14 +33,28 @@ function isIOS(): boolean {
 function isAndroid(): boolean {
   return /Android/i.test(navigator.userAgent);
 }
+function canCaptureStream(): boolean {
+  const htmlCanvasProto = (HTMLCanvasElement as any)?.prototype;
+  const offscreenProto = (globalThis as any).OffscreenCanvas?.prototype;
+  return (
+    typeof htmlCanvasProto?.captureStream === 'function' ||
+    typeof offscreenProto?.captureStream === 'function'
+  );
+}
+function canPlay(mime: Mime): boolean {
+  const v = document.createElement('video');
+  const candidates = [mime, `${mime};codecs=avc1.42E01E,mp4a.40.2`, `${mime};codecs=vp8,opus`];
+  return candidates.some((m) => typeof v.canPlayType === 'function' && v.canPlayType(m as any) !== '');
+}
+/** 端末互換優先：iOS/Android は MP4、その他は WebM */
 export function getPreferredMimeType(): Mime {
-  return (isIOS() || isAndroid()) ? 'video/mp4' : 'video/webm';
+  return (isIOS() || isAndroid()) ? 'video/mp4' : 'video/webm'; // :contentReference[oaicite:4]{index=4}
 }
 function altPreferred(mime: Mime): Mime {
   return mime === 'video/webm' ? 'video/mp4' : 'video/webm';
 }
 
-/* ---------------- フレーム正規化ユーティリティ ---------------- */
+/* ---------------- フレーム正規化（drawImage 可能に） ---------------- */
 
 type ImageDataLike = { data: Uint8ClampedArray | Uint8Array; width: number; height: number };
 type AnyFrame =
@@ -187,6 +180,7 @@ async function toDrawable(src: AnyFrame, fallbackSize?: { width: number; height:
   }
   if ((src as any)?.image && isCanvasImageSource((src as any).image)) return (src as any).image;
   if ((src as any)?.video && isCanvasImageSource((src as any).video)) return (src as any).video;
+
   if (
     src &&
     typeof src === 'object' &&
@@ -241,10 +235,7 @@ async function toDrawable(src: AnyFrame, fallbackSize?: { width: number; height:
       const b64 = (maybe.base64 ?? maybe.data) as string;
       const mime = (maybe.format ?? maybe.type ?? 'image/png') as string;
       try {
-        const bin = atob(b64.replace(/^data:.*;base64,/, ''));
-        const u8 = new Uint8Array(bin.length);
-        for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
-        const blob = new Blob([u8], { type: mime });
+        const blob = base64ToBlob(b64.replace(/^data:.*;base64,/, ''), mime);
         return await createImageBitmap(blob);
       } catch {}
     }
@@ -261,8 +252,7 @@ async function toDrawable(src: AnyFrame, fallbackSize?: { width: number; height:
       const channels = maybe.channels ?? 4;
       const rgba = channels === 4 ? buf : expandToRgba(buf, w, h, channels);
       const c = document.createElement('canvas');
-      c.width = w;
-      c.height = h;
+      c.width = w; c.height = h;
       const ctx = c.getContext('2d');
       if (!ctx) throw new Error('2D context unavailable');
       const id = makeImageData(rgba, w, h);
@@ -274,6 +264,7 @@ async function toDrawable(src: AnyFrame, fallbackSize?: { width: number; height:
   }
   if (src instanceof Blob) return await createImageBitmap(src);
   if (typeof src === 'string') return await stringToDrawable(src);
+
   if (fallbackSize) {
     const c = document.createElement('canvas');
     c.width = fallbackSize.width; c.height = fallbackSize.height;
@@ -285,122 +276,111 @@ async function toDrawable(src: AnyFrame, fallbackSize?: { width: number; height:
   throw new TypeError('toDrawable: unsupported frame type for drawImage');
 }
 
-/* ---------------- FFmpeg ローダ（関数API/クラスAPI 両対応） ---------------- */
-
-type FFmpegClassic = {
-  isLoaded(): boolean;
-  load(): Promise<void>;
-  FS(op: string, path: string, data?: Uint8Array): any;
-  run(...args: string[]): Promise<void>;
-};
-type FFmpegModern = {
-  loaded: boolean;
-  load(): Promise<void>;
-  writeFile(path: string, data: Uint8Array): Promise<void>;
-  readFile(path: string): Promise<Uint8Array>;
-  exec(args: string[]): Promise<void>;
-  on?(event: string, cb: (...args: any[]) => void): void;
-  coreURL?: string;
-};
-
-type FFmpegUnified = {
-  load(): Promise<void>;
-  write(path: string, data: Uint8Array): Promise<void>;
-  read(path: string): Promise<Uint8Array>;
-  exec(args: string[]): Promise<void>;
-};
-
-async function getFFmpegUnified(): Promise<FFmpegUnified | null> {
-  // 1) プロジェクト依存の ESM
-  try {
-    console.info('[FFmpeg] trying ESM import: @ffmpeg/ffmpeg');
-    const m: any = await import('@ffmpeg/ffmpeg');
-    const unified = coerceModuleToUnified(m);
-    if (unified) return unified;
-    console.warn('[FFmpeg] ESM loaded but usable API not found:', m);
-  } catch (e) {
-    console.warn('[FFmpeg] ESM import failed: @ffmpeg/ffmpeg', e);
-  }
-  // 2) CDN (ESM)
-  try {
-    const url = 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.15/dist/esm/index.js';
-    console.info('[FFmpeg] trying CDN ESM:', url);
-    // @ts-ignore
-    const m: any = await import(/* @vite-ignore */ url);
-    const unified = coerceModuleToUnified(m);
-    if (unified) return unified;
-    console.warn('[FFmpeg] CDN ESM loaded but usable API not found:', m);
-  } catch (e) {
-    console.warn('[FFmpeg] CDN ESM import failed', e);
-  }
-  // 3) CDN (UMD)
-  try {
-    const url = 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.15/dist/umd/ffmpeg.min.js';
-    console.info('[FFmpeg] trying CDN UMD:', url);
-    await loadScript(url);
-    const g: any = globalThis as any;
-    const ns = g?.FFmpeg || g?.ffmpeg || g?.default?.FFmpeg || g?.default?.ffmpeg || g;
-    const unified = coerceModuleToUnified(ns);
-    if (unified) return unified;
-    console.error('[FFmpeg] UMD loaded but usable API not found on window');
-  } catch (e) {
-    console.error('[FFmpeg] CDN UMD load failed', e);
-  }
-  console.error('[FFmpeg] all strategies failed to resolve usable FFmpeg API');
-  return null;
+function detectSize(src: any): { width: number; height: number } {
+  return {
+    width: src?.videoWidth ?? src?.naturalWidth ?? src?.width ?? 720,
+    height: src?.videoHeight ?? src?.naturalHeight ?? src?.height ?? 1280,
+  };
 }
 
-function coerceModuleToUnified(mod: any): FFmpegUnified | null {
-  if (!mod) return null;
+function canvasSourceToPng(src: CanvasImageSource, width: number, height: number): Uint8Array {
+  const c = document.createElement('canvas');
+  c.width = width; c.height = height;
+  const ctx = c.getContext('2d');
+  if (!ctx) throw new Error('2D context unavailable');
+  ctx.drawImage(src as any, 0, 0, width, height);
+  const dataUrl = c.toDataURL('image/png');
+  const bin = atob(dataUrl.split(',')[1]);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
 
-  // --- 関数API（createFFmpeg）
-  const createFFmpeg =
-    mod?.createFFmpeg ??
-    mod?.default?.createFFmpeg ??
-    mod?.default?.default?.createFFmpeg ??
-    (typeof mod === 'function' && mod.name === 'createFFmpeg' ? mod : undefined);
+/* ---------------- MediaRecorder 経路 ---------------- */
 
-  if (typeof createFFmpeg === 'function') {
-    const ff: FFmpegClassic = createFFmpeg({
-      log: false,
-      worker: false,
-      corePath: corePathFromBase(), // public/ffmpeg/ffmpeg-core.js 前提
+async function encodeWithMediaRecorder(
+  frames: CanvasImageSource[],
+  fps: number,
+  mime: Mime,
+): Promise<Blob> {
+  const { width, height } = detectSize(frames[0]);
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('2D context unavailable');
+
+  const stream = (canvas as any).captureStream ? (canvas as any).captureStream(fps) : (canvas as any).captureStream?.();
+  if (!stream) throw new Error('captureStream unavailable');
+
+  const chunks: BlobPart[] = [];
+  const recorder = new (globalThis as any).MediaRecorder(stream, { mimeType: mime });
+  recorder.ondataavailable = (e: any) => e.data && chunks.push(e.data);
+  const stopped = new Promise<void>((resolve, reject) => {
+    recorder.onstop = () => resolve();
+    recorder.onerror = (ev: any) => reject(ev.error || new Error('MediaRecorder error'));
+  });
+
+  recorder.start(Math.max(1000 / fps, 100));
+  const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  for (let i = 0; i < frames.length; i++) {
+    ctx.clearRect(0, 0, width, height);
+    ctx.drawImage(frames[i] as any, 0, 0, width, height);
+    // eslint-disable-next-line no-await-in-loop
+    await delay(1000 / fps);
+  }
+
+  recorder.stop();
+  await stopped;
+
+  return new Blob(chunks, { type: mime });
+}
+
+/* ---------------- ffmpeg.wasm 経路（連番フレーム→動画） ---------------- */
+
+import { encodeWithFFmpeg as encodeWithFFmpegPng } from './ffmpeg'; // 連番PNG→動画
+// 既存の「ffmpeg で first/secondary MIME を試す + サイズでフォールバック」の方針に沿う実装です。:contentReference[oaicite:5]{index=5}
+
+async function encodeWithFFmpeg(
+  frames: CanvasImageSource[],
+  fps: number,
+  mime: Mime,
+): Promise<Blob> {
+  // ffmpeg.ts は cv.Mat 前提だが、PNG 連番をそのままFSに書くのでここで RGBA→PNG 化して渡す必要なし。
+  // ただし現在の ffmpeg.ts 実装は Mat→PNG を内部で行うため、本関数では Mat 互換オブジェクトを作る。
+  // Mat 互換: { data: Uint8Array, rows: number, cols: number }
+  const mats: any[] = [];
+  for (let i = 0; i < frames.length; i++) {
+    const s = frames[i];
+    const size = detectSize(s);
+    const pngBytes = canvasSourceToPng(s, size.width, size.height);
+    // ffmpeg.ts は Mat→PNG を作るが、PNG バイトがあれば最短で使いたいところ。
+    // 互換のため ImageData 経由の Mat 風オブジェクトを作成する。
+    // （既存 ffmpeg.ts の matToPngBytes は Mat.data から PNG を生成するので、ここは RGBA ImageData を渡す）
+    // → RGBA に戻す
+    const c = document.createElement('canvas');
+    c.width = size.width; c.height = size.height;
+    const ctx = c.getContext('2d');
+    if (!ctx) throw new Error('2D context unavailable');
+    const img = new Image();
+    img.src = 'data:image/png;base64,' + btoa(String.fromCharCode(...pngBytes));
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise<void>((res, rej) => {
+      img.onload = () => res();
+      img.onerror = () => rej(new Error('png decode failed'));
     });
-    return {
-      async load() { if (!ff.isLoaded()) await ff.load(); },
-      async write(path, data) { ff.FS('writeFile', path, data); },
-      async read(path) { return ff.FS('readFile', path) as Uint8Array; },
-      async exec(args) { await ff.run(...args); },
-    };
+    ctx.drawImage(img, 0, 0, size.width, size.height);
+    const id = ctx.getImageData(0, 0, size.width, size.height);
+    mats.push({ data: id.data, rows: size.height, cols: size.width, channels: () => 4 });
   }
-
-  // --- クラスAPI（new FFmpeg）
-  const FFmpegClass =
-    mod?.FFmpeg ??
-    mod?.default?.FFmpeg ??
-    (typeof mod === 'function' && /FFmpeg/.test(mod?.name || '') ? mod : undefined);
-
-  if (typeof FFmpegClass === 'function') {
-    const inst: FFmpegModern = new FFmpegClass();
-    try { (inst as any).coreURL = corePathFromBase().replace(/\.js$/, '.wasm'); } catch {}
-    return {
-      async load() {
-        try { if (!(inst as any).loaded) await inst.load(); else await inst.load(); }
-        catch { await inst.load(); }
-      },
-      async write(path, data) { await inst.writeFile(path, data); },
-      async read(path) { return await inst.readFile(path); },
-      async exec(args) { await inst.exec(args); },
-    };
-  }
-
-  return null;
+  return await encodeWithFFmpegPng(mats, fps, mime);
 }
 
 /* ---------------- パブリックAPI ---------------- */
 
 export async function encodeVideo(frames: AnyFrame[], opts: EncodeInput): Promise<Blob> {
-  const { blob } = await encodeVideoWithMeta(frames, normalizeOptions(opts));
+  const { blob } = await encodeVideoWithMeta(frames, typeof opts === 'number' ? { fps: opts } : opts);
   return blob;
 }
 
@@ -413,134 +393,57 @@ export async function encodeVideoWithMeta(
   const primary: Mime = preferredMime ?? getPreferredMimeType();
   const secondary: Mime = altPreferred(primary);
 
-  // 1) ★安定な MediaRecorder を最優先
-  try {
-    const mr = await import('./mediarec');
-    const blob = await mr.encodeWithMediaRecorder(
-      (frames as unknown) as any, fps, primary
-    );
-    if (blob.size >= MIN_VALID_SIZE) {
-      const mime = (blob.type || primary) as Mime;
-      const filename = mime === 'video/mp4' ? 'output.mp4' : 'output.webm';
-      return { blob, filename, mime };
+  // まず frames を drawImage 可能な型に正規化（MediaRecorder/ffmpeg 共用）
+  const drawables: CanvasImageSource[] = [];
+  for (const f of frames) drawables.push(await toDrawable(f, { width: 720, height: 1280 }));
+  // 既存コミットでの「広い入力型を受けて正規化」の方針を踏襲。:contentReference[oaicite:6]{index=6}
+
+  // 1) MediaRecorder（再生可否＋サイズで判定）
+  if (typeof (globalThis as any).MediaRecorder === 'function' && canCaptureStream()) {
+    try {
+      const blob1 = await encodeWithMediaRecorder(drawables, fps, primary);
+      console.log('[Encode] MediaRecorder-1 type/size:', blob1.type, blob1.size);
+      if (blob1.size >= MIN_VALID_SIZE && canPlay((blob1.type || primary) as Mime)) {
+        const mime1 = (blob1.type || primary) as Mime;
+        const name1 = mime1 === 'video/mp4' ? 'output.mp4' : 'output.webm';
+        return { blob: blob1, filename: name1, mime: mime1 };
+      }
+      console.warn('[Encode] MR-1 not valid/playable. Trying secondary...');
+      const blob2 = await encodeWithMediaRecorder(drawables, fps, secondary);
+      console.log('[Encode] MediaRecorder-2 type/size:', blob2.type, blob2.size);
+      if (blob2.size >= MIN_VALID_SIZE && canPlay((blob2.type || secondary) as Mime)) {
+        const mime2 = (blob2.type || secondary) as Mime;
+        const name2 = mime2 === 'video/mp4' ? 'output.mp4' : 'output.webm';
+        return { blob: blob2, filename: name2, mime: mime2 };
+      }
+    } catch (e) {
+      console.warn('MediaRecorder path failed', e);
     }
-    console.warn('[Encode] MediaRecorder output too small, fallback to ffmpeg…');
+  } else {
+    console.log('MediaRecorder skipped: captureStream() not supported or missing.');
+  }
+
+  // 2) ffmpeg.wasm（まず primary、ダメなら secondary）
+  try {
+    const b1 = await encodeWithFFmpeg(drawables, fps, primary);
+    console.log('[Encode] ffmpeg-1 type/size:', b1.type, b1.size);
+    if (b1.size >= MIN_VALID_SIZE) {
+      const mime = (b1.type || primary) as Mime;
+      const name = mime === 'video/mp4' ? 'output.mp4' : 'output.webm';
+      return { blob: b1, filename: name, mime };
+    }
+    console.warn('[Encode] FFmpeg output too small, switching mime...');
+    const b2 = await encodeWithFFmpeg(drawables, fps, secondary);
+    const mime2 = (b2.type || secondary) as Mime;
+    const name2 = mime2 === 'video/mp4' ? 'output.mp4' : 'output.webm';
+    return { blob: b2, filename: name2, mime: mime2 };
   } catch (e1) {
-    console.warn(`MediaRecorder failed with ${primary}, fallback to ffmpeg...`, e1);
+    console.warn(`ffmpeg.wasm failed with ${primary}`, e1);
+    const b2 = await encodeWithFFmpeg(drawables, fps, secondary);
+    console.log('[Encode] ffmpeg-2 type/size:', b2.type, b2.size);
+    if (b2.size < MIN_VALID_SIZE) throw new Error('Video encoding failed: empty or too small blob.');
+    const mime = (b2.type || secondary) as Mime;
+    const name = mime === 'video/mp4' ? 'output.mp4' : 'output.webm';
+    return { blob: b2, filename: name, mime };
   }
-
-  // 2) フォールバックとして ffmpeg（単一JPEGルート）を試す
-  try {
-    const blob = await encodeWithFFmpegLoop(frames, fps, primary);
-    if (blob.size >= MIN_VALID_SIZE) {
-      const mime = (blob.type || primary) as Mime;
-      const filename = mime === 'video/mp4' ? 'output.mp4' : 'output.webm';
-      return { blob, filename, mime };
-    }
-    console.warn('[Encode] FFmpeg output also too small, trying secondary mime…');
-  } catch (e2) {
-    console.warn(`ffmpeg.wasm failed with ${primary}, trying secondary mime...`, e2);
-  }
-
-  // 3) 最後の手段：別MIMEで ffmpeg をもう一度
-  console.log(`[Encode] Retrying with secondary mime: ${secondary}`);
-  const blob = await encodeWithFFmpegLoop(frames, fps, secondary);
-  const mime = (blob.type || secondary) as Mime;
-  const filename = mime === 'video/mp4' ? 'output.mp4' : 'output.webm';
-  return { blob, filename, mime };
-}
-
-/* ---------------- ffmpeg 単一JPEGルート（FSエラー回避） ---------------- */
-
-async function encodeWithFFmpegLoop(
-  frames: AnyFrame[],
-  fps: number,
-  target: Mime,
-): Promise<Blob> {
-  const ff = await getFFmpegUnified();
-  if (!ff) throw new Error('ffmpeg-unavailable');
-  await ff.load();
-
-  // 入力の先頭フレームを drawable に
-  const firstDrawable = await toDrawable(frames[0] as any, { width: 720, height: 1280 });
-  const { width, height } = detectSize(firstDrawable as any);
-
-  // 1枚だけ JPEG にして書き込む（仮想FS負荷を最小化）
-  const jpg = await canvasSourceToJpegBytes(firstDrawable as any, width, height, 0.8);
-  await ff.write('frame.jpg', jpg);
-
-  // 最小尺を強制（fpsが低すぎても 1s に）
-  const duration = Math.max(MIN_DURATION_SEC, (frames.length / Math.max(1, fps)));
-
-  const out = target === 'video/webm' ? 'out.webm' : 'out.mp4';
-  const args =
-    target === 'video/webm'
-      ? [
-          '-loop', '1',
-          '-t', String(duration),
-          '-framerate', String(fps),
-          '-i', 'frame.jpg',
-          '-c:v', 'libvpx-vp8',
-          '-b:v', '2M',
-          '-pix_fmt', 'yuv420p',
-          '-r', String(fps),
-          out
-        ]
-      : [
-          '-loop', '1',
-          '-t', String(duration),
-          '-framerate', String(fps),
-          '-i', 'frame.jpg',
-          '-c:v', 'libx264',
-          '-profile:v', 'baseline',
-          '-level', '3.1',
-          '-pix_fmt', 'yuv420p',
-          '-b:v', '2M',
-          '-maxrate', '2M',
-          '-bufsize', '4M',
-          '-movflags', '+faststart',
-          '-r', String(fps),
-          '-g', String(Math.max(1, Math.round(fps * 2))),
-          out
-        ];
-
-  await ff.exec(args);
-  const data: Uint8Array = await ff.read(out);
-
-  // 片付け（失敗しても無視）
-  try { await ff.exec(['-y', '-i', 'frame.jpg', '-f', 'null', '-']); } catch {}
-
-  const mime = target === 'video/webm' ? 'video/webm' : 'video/mp4';
-  // ★ 安定策：data.buffer ではなく data をそのまま Blob へ（既知の互換対策）:contentReference[oaicite:1]{index=1}
-  // TS2322 ビルドエラー対策：data.buffer が SharedArrayBuffer の可能性があるため、
-  // new Uint8Array(data) でコピーを強制し、必ず標準の ArrayBuffer を持つようにする。
-  const safeData = new Uint8Array(data);
-  return new Blob([safeData.buffer], { type: mime });
-}
-
-/* ---------------- 画像→JPEG バイト列 ---------------- */
-
-async function canvasSourceToJpegBytes(
-  src: CanvasImageSource,
-  width: number,
-  height: number,
-  quality = 0.7
-): Promise<Uint8Array> {
-  const c = document.createElement('canvas');
-  c.width = width; c.height = height;
-  const ctx = c.getContext('2d');
-  if (!ctx) throw new Error('2D context unavailable');
-  ctx.drawImage(src as any, 0, 0, width, height);
-  const blob: Blob = await new Promise((resolve, reject) => {
-    c.toBlob((b) => (b ? resolve(b) : reject(new Error('toBlob jpeg failed'))), 'image/jpeg', quality);
-  });
-  const buf = await blob.arrayBuffer();
-  return new Uint8Array(buf);
-}
-
-function detectSize(src: any): { width: number; height: number } {
-  return {
-    width: src?.videoWidth ?? src?.naturalWidth ?? src?.width ?? 720,
-    height: src?.videoHeight ?? src?.naturalHeight ?? src?.height ?? 1280,
-  };
 }
