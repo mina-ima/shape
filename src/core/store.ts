@@ -11,6 +11,10 @@ import {
   CameraPermissionDeniedError,
 } from "../camera";
 
+// ★ 追加：ストリーミング描画・エンコード
+import { buildEmergeDrawer } from "../compose/emerge_draw";
+import { encodeWithMediaRecorderDraw } from "../encode/mediarec";
+
 export const MAX_RETRIES = 3;
 
 type Status = "idle" | "processing" | "success" | "error";
@@ -141,12 +145,13 @@ function guessKeywordsForUnsplash(maskW: number, maskH: number, imageW: number, 
   const isPortrait = ar < 1.0;
   const kws: string[] = [];
 
-  // 形状のヒント（かなりラフ）
+  // 形状ヒント（ラフ）
   if (maskAR < 0.8) kws.push("tall");
   else if (maskAR > 1.2) kws.push("wide");
 
-  // 動物 or キャラ（ユーザー要望を優先）
-  kws.push("animal OR character");
+  // ユーザー要望：動物 or キャラ（論理演算子を使わず別単語で）
+  kws.push("animal");
+  kws.push("character");
 
   // 構図
   if (isPortrait) kws.push("portrait");
@@ -253,58 +258,103 @@ export const useStore = create<AppState>((set, get) => ({
           console.log("[Store] Unsplash API key not set; fallback to parallax.");
         }
 
-        // 7) フレーム生成
-        console.log("[Store] generate frames...");
-        const fps = 30;
-        const duration = 5; // 秒
-        let frames: (HTMLCanvasElement)[];
+        // 7) 生成＆8) エンコード
+        const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+        const fps = isMobile ? 24 : 30;
+        const duration = isMobile ? 4 : 5;
 
         if (useEmerge && similarImage) {
-          frames = await generateEmergeFrames(
-            foreground, // RGB3ch
-            background, // RGB3ch
-            resizedMask,
-            similarImage,
+          // ★ ストリーミング描画：フレーム配列を保持しない
+          console.log("[Store] generate frames (stream-drawer)...");
+          const drawer = buildEmergeDrawer(
+            foreground,          // RGB 3ch
+            background,          // RGB 3ch
+            resizedMask,         // 1ch mask
+            similarImage,        // 類似画像
             inputImage.width, inputImage.height,
-            duration, fps,
+            duration, fps
           );
+
+          console.log("[Store] encode (stream)...");
+          let blob: Blob | null = null;
+          try {
+            blob = await encodeWithMediaRecorderDraw(
+              { width: drawer.width, height: drawer.height, total: drawer.totalFrames, draw: drawer.draw },
+              fps,
+              isMobile ? "video/mp4" : "video/webm"
+            );
+          } catch (e) {
+            console.warn("[Encode] MediaRecorder stream failed, fallback to array path:", e);
+          }
+
+          if (!blob || blob.size < 10_000) {
+            // 最後の手段：従来の配列版（必要最小限のみ）
+            console.log("[Store] stream encode failed; fallback to frames array.");
+            const frames = await generateEmergeFrames(
+              foreground, background, resizedMask, similarImage,
+              inputImage.width, inputImage.height, duration, fps
+            );
+            let meta = await encodeVideoWithMeta(frames as any, { fps });
+            const MIN_BYTES = 10_000;
+            if (!meta?.blob || meta.blob.size < MIN_BYTES) {
+              const alt = meta?.mime === "video/mp4" ? "video/webm" : "video/mp4";
+              meta = await encodeVideoWithMeta(frames as any, { fps, preferredMime: alt });
+            }
+            if (!meta?.blob || meta.blob.size < MIN_BYTES) throw new Error("Video encoding failed.");
+            set({
+              generatedVideoBlob: meta.blob,
+              generatedVideoMimeType: meta.mime,
+              result: { blob: meta.blob, filename: meta.filename, mime: meta.mime },
+            });
+          } else {
+            const mime = (blob.type || (isMobile ? "video/mp4" : "video/webm")) as "video/mp4" | "video/webm";
+            const filename = mime === "video/mp4" ? "output.mp4" : "output.webm";
+            set({
+              generatedVideoBlob: blob,
+              generatedVideoMimeType: mime,
+              result: { blob, filename, mime },
+            });
+          }
+
+          set({ status: "success", error: null, retryCount: attemptNo });
+          console.log("[Store] attempt successful (stream).");
+          return;
         } else {
-          frames = await generateParallaxFrames(
+          // parallax ルート（従来通り）
+          console.log("[Store] generate frames (parallax)...");
+          const frames = await generateParallaxFrames(
             foreground, background,
             inputImage.width, inputImage.height,
             duration, fps,
           );
+          console.log("[Store] frames ready:", frames.length);
+
+          console.log("[Store] encode...");
+          let meta = await encodeVideoWithMeta(frames as any, { fps });
+          console.log("[Result] first encode:", { mime: meta?.mime, size: meta?.blob?.size, filename: meta?.filename });
+
+          const MIN_BYTES = 10_000;
+          if (!meta?.blob || meta.blob.size < MIN_BYTES) {
+            console.warn("[Encode] Blob too small or empty. Retrying with alternate mime...");
+            const altMime = meta?.mime === "video/mp4" ? "video/webm" : "video/mp4";
+            meta = await encodeVideoWithMeta(frames as any, { fps, preferredMime: altMime });
+            console.log("[Result] alt encode:", { mime: meta?.mime, size: meta?.blob?.size, filename: meta?.filename });
+          }
+          if (!meta?.blob || meta.blob.size < MIN_BYTES) {
+            throw new Error("Video encoding failed: empty or too small blob.");
+          }
+
+          set({
+            generatedVideoBlob: meta.blob,
+            generatedVideoMimeType: meta.mime,
+            result: { blob: meta.blob, filename: meta.filename, mime: meta.mime },
+          });
+          console.log("[Store] encode done: size=", meta.blob.size, "mime=", meta.mime);
+
+          set({ status: "success", error: null, retryCount: attemptNo });
+          console.log("[Store] attempt successful.");
+          return;
         }
-        console.log("[Store] frames ready:", frames.length);
-
-        // 8) エンコード
-        console.log("[Store] encode...");
-        let meta = await encodeVideoWithMeta(frames as any, { fps });
-        console.log("[Result] first encode:", { mime: meta?.mime, size: meta?.blob?.size, filename: meta?.filename });
-
-        const MIN_BYTES = 10_000;
-        const isBlobInvalid = !meta?.blob || meta.blob.size < MIN_BYTES;
-        if (isBlobInvalid) {
-          console.warn("[Encode] Blob too small or empty. Retrying with alternate mime...");
-          const altMime = meta?.mime === "video/mp4" ? "video/webm" : "video/mp4";
-          meta = await encodeVideoWithMeta(frames as any, { fps, preferredMime: altMime });
-          console.log("[Result] alt encode:", { mime: meta?.mime, size: meta?.blob?.size, filename: meta?.filename });
-        }
-        if (!meta?.blob || meta.blob.size < MIN_BYTES) {
-          throw new Error("Video encoding failed: empty or too small blob.");
-        }
-
-        // 9) state 更新→success
-        set({
-          generatedVideoBlob: meta.blob,
-          generatedVideoMimeType: meta.mime,
-          result: { blob: meta.blob, filename: meta.filename, mime: meta.mime },
-        });
-        console.log("[Store] encode done: size=", meta.blob.size, "mime=", meta.mime);
-
-        set({ status: "success", error: null, retryCount: attemptNo });
-        console.log("[Store] attempt successful.");
-        return;
       } catch (err) {
         const message =
           err instanceof CameraPermissionDeniedError
