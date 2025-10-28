@@ -1,7 +1,10 @@
 // src/compose/emerge_draw.ts
-// 目的：emerge 演出を「フレーム配列を作らず」描画関数で逐次生成する。
-// encode側はこの drawer を受け取って1枚ずつ描画→MediaRecorderへ流す。
-// 追加：Theme（色テーマ）に対応。未指定なら従来の見た目で動作。
+// 目的：元画像のニュアンス（色・質感）を残しつつ、similar画像から“生まれてくる”演出を逐次描画。
+// 変更点：
+// - 背景に元画像の強ブラー版を使用（色の雰囲気をキープ）
+// - マスク内で similar と元画像をクロスフェード
+// - Theme があれば背景グラデ＆アクセント光を追加し、素材色に追従
+// - 既存互換：Theme/元画像なしでも従来どおり動作
 
 type U8 = Uint8Array;
 
@@ -10,7 +13,7 @@ export type Theme = {
   bg1: { r: number; g: number; b: number };
   /** 背景グラデーション下部の色 */
   bg2: { r: number; g: number; b: number };
-  /** ラジアルの光（スクリーン合成） */
+  /** ラジアルの光（screen 合成） */
   accent: { r: number; g: number; b: number };
   /** 類似画像へ乗せるティント（overlay） */
   subjectTint: { r: number; g: number; b: number };
@@ -74,7 +77,6 @@ function drawWithMask(
 
 /* --------- 色テーマ向けの軽量描画ユーティリティ --------- */
 
-/** 背景グラデ（わずかに回転させて静的に見せない） */
 function fillGradient(
   ctx: CanvasRenderingContext2D,
   w: number,
@@ -99,7 +101,6 @@ function fillGradient(
   ctx.restore();
 }
 
-/** 類似画像にティント(overlay)を掛ける */
 function applyTint(ctx: CanvasRenderingContext2D, color: Theme["subjectTint"], alpha = 0.35) {
   ctx.save();
   ctx.globalAlpha = alpha;
@@ -109,7 +110,6 @@ function applyTint(ctx: CanvasRenderingContext2D, color: Theme["subjectTint"], a
   ctx.restore();
 }
 
-/** ラジアルの光（screen合成） */
 function radialAccent(ctx: CanvasRenderingContext2D, color: Theme["accent"], strength: number) {
   if (strength <= 0) return;
   const { width: w, height: h } = ctx.canvas;
@@ -124,6 +124,24 @@ function radialAccent(ctx: CanvasRenderingContext2D, color: Theme["accent"], str
   ctx.restore();
 }
 
+/* --------- 元画像ブラー（縮小→拡大で軽量疑似ブラー） --------- */
+function makeBlurredFrom(canvasSrc: CanvasImageSource, w: number, h: number): HTMLCanvasElement {
+  const s = 0.1; // 10%まで縮小
+  const sw = Math.max(1, Math.round(w * s));
+  const sh = Math.max(1, Math.round(h * s));
+
+  const { c: small, ctx: sctx } = makeCanvas(sw, sh);
+  sctx.imageSmoothingEnabled = true;
+  sctx.imageSmoothingQuality = "low";
+  sctx.drawImage(canvasSrc as any, 0, 0, sw, sh);
+
+  const { c: big, ctx: bctx } = makeCanvas(w, h);
+  bctx.imageSmoothingEnabled = true;
+  bctx.imageSmoothingQuality = "high";
+  bctx.drawImage(small, 0, 0, w, h);
+  return big;
+}
+
 /* --------- 公開API --------- */
 
 export type EmergeDrawer = {
@@ -133,6 +151,9 @@ export type EmergeDrawer = {
   draw: (ctx: CanvasRenderingContext2D, frameIndex: number) => void;
 };
 
+/**
+ * @param originalRGB  元画像のRGB(3ch)。省略可。渡すと色・質感の反映が強くなる。
+ */
 export function buildEmergeDrawer(
   foregroundRGB: U8,
   backgroundRGB: U8,
@@ -142,17 +163,19 @@ export function buildEmergeDrawer(
   height: number,
   durationSec: number,
   fps: number,
-  theme?: Theme, // ★ 追加：色テーマ（省略可）
+  theme?: Theme,       // 色テーマ（省略可）
+  originalRGB?: U8,    // ★ 追加：元画像RGB（省略可）
 ): EmergeDrawer {
   const fg = rgbaFromRGB(foregroundRGB, width, height);
   const bg = rgbaFromRGB(backgroundRGB, width, height);
   const alphaMask = maskCanvasFrom1ch(mask1ch, width, height);
   const total = Math.max(1, Math.round(durationSec * fps));
 
-  // テーマが無い場合は従来動作／ある場合は色反映
-  const useTheme = !!theme;
+  // 元画像キャンバス（ある場合）
+  const srcCanvas = originalRGB ? rgbaFromRGB(originalRGB, width, height) : fg;
+  const blurredSrc = makeBlurredFrom(srcCanvas, width, height);
 
-  // デフォルト（テーマが無いとき用）の下地色
+  // テーマが無い場合も動くようフォールバック色を用意
   const fallbackBg1 = { r: 10, g: 10, b: 14 };
   const fallbackBg2 = { r: 38, g: 38, b: 46 };
   const fallbackAccent = { r: 120, g: 170, b: 255 };
@@ -163,74 +186,77 @@ export function buildEmergeDrawer(
     draw: (ctx, f) => {
       const t = f / (total - 1 || 1);
 
-      // 背景（色グラデ＋軽いズーム）
-      const bgScale = 1 + 0.05 * easeOutCubic(t);
+      // ===== 背景：元画像ブラーをベースに、（あれば）テーマグラデ＆光を重畳 =====
+      const bgScale = 1 + 0.04 * easeOutCubic(t);
       const bw = Math.round(width * bgScale);
       const bh = Math.round(height * bgScale);
 
       ctx.clearRect(0, 0, width, height);
+      ctx.drawImage(blurredSrc, (width - bw) / 2, (height - bh) / 2, bw, bh);
 
-      if (useTheme) {
-        // テーマあり：背景グラデーション＋アクセント光
-        fillGradient(ctx, width, height, theme!.bg1, theme!.bg2, t);
-        ctx.drawImage(bg, (width - bw) / 2, (height - bh) / 2, bw, bh);
-        radialAccent(ctx, theme!.accent, easeOutCubic(t) * 0.6);
+      if (theme) {
+        ctx.globalAlpha = 0.65; // 元画像色を活かしつつグラデを乗せる
+        fillGradient(ctx, width, height, theme.bg1, theme.bg2, t);
+        ctx.globalAlpha = 1;
+        radialAccent(ctx, theme.accent, 0.5 * easeOutCubic(t));
       } else {
-        // テーマなし：従来どおり（グラデ薄めの代替）
+        ctx.globalAlpha = 0.4;
         fillGradient(ctx, width, height, fallbackBg1, fallbackBg2, t);
-        ctx.drawImage(bg, (width - bw) / 2, (height - bh) / 2, bw, bh);
-        radialAccent(ctx, fallbackAccent, easeOutCubic(t) * 0.3);
+        ctx.globalAlpha = 1;
+        radialAccent(ctx, fallbackAccent, 0.25 * easeOutCubic(t));
       }
 
-      // similar の出現（ティント付与）
-      const show1 = t < 0.4 ? easeOutCubic(t / 0.4) : t < 0.6 ? 1 : 1 - easeInOutQuad((t - 0.6) / 0.4);
-      const scale = 1.2 - 0.2 * show1;
+      // ===== similar の出現（ティント付） → 元画像とのクロスフェード =====
+      const phaseIn = t < 0.4 ? easeOutCubic(t / 0.4) : 1;
+      const phaseHold = t >= 0.4 && t < 0.7 ? 1 : 0;
+      const phaseOut = t >= 0.7 ? 1 - easeInOutQuad((t - 0.7) / 0.3) : 1;
+      const simStrength = Math.max(0, Math.min(1, 0.85 * phaseIn * (phaseHold ? 1 : phaseOut)));
+
+      const scale = 1.15 - 0.15 * simStrength;
       const sw = Math.round(width * scale);
       const sh = Math.round(height * scale);
 
-      const tmp = document.createElement("canvas");
-      tmp.width = width; tmp.height = height;
-      const sctx = tmp.getContext("2d")!;
+      const tmpSim = document.createElement("canvas");
+      tmpSim.width = width; tmpSim.height = height;
+      const sctx = tmpSim.getContext("2d")!;
       sctx.drawImage(similar as any, (width - sw) / 2, (height - sh) / 2, sw, sh);
-      // ティント（テーマがあればそれを、無ければ白系薄め）
-      const tintColor = useTheme ? theme!.subjectTint : fallbackTint;
-      applyTint(sctx, tintColor, 0.35 + 0.25 * show1);
+      applyTint(sctx, (theme ? theme.subjectTint : fallbackTint), 0.25 + 0.35 * simStrength);
 
-      // 簡易ぼかし（重ね描き）
-      const passes = Math.round(2 + 2 * show1);
+      // 柔らかい“滲み”表現（重ね描き）
+      const passes = 2 + Math.round(2 * simStrength);
       for (let p = 0; p < passes; p++) {
-        const dx = p - passes / 2;
-        const dy = p - passes / 2;
-        ctx.globalAlpha = 0.6 / (p + 1);
-        ctx.drawImage(tmp, dx, dy);
-      }
-      ctx.globalAlpha = 1;
-
-      // ラジアル露出（0.4〜0.6）
-      if (t >= 0.4 && t < 0.6) {
-        const pr = (t - 0.4) / 0.2;
-        const mask = document.createElement("canvas");
-        mask.width = width; mask.height = height;
-        const mctx = mask.getContext("2d")!;
-        const maxR = Math.hypot(width, height) * 0.6;
-        const r = maxR * easeOutCubic(pr);
-        const grad = mctx.createRadialGradient(
-          width / 2, height / 2, Math.max(1, r * 0.2),
-          width / 2, height / 2, r
-        );
-        grad.addColorStop(0, "rgba(255,255,255,1)");
-        grad.addColorStop(1, "rgba(255,255,255,0)");
-        mctx.fillStyle = grad;
-        mctx.fillRect(0, 0, width, height);
-        drawWithMask(ctx, tmp, mask, width, height);
+        const dx = (p - passes / 2), dy = (p - passes / 2);
+        ctx.globalAlpha = 0.5 / (p + 1);
+        drawWithMask(ctx, tmpSim, alphaMask, width, height);
+        ctx.globalAlpha = 1;
       }
 
-      // 前景＋微パララックス
+      // ===== 元画像（オリジナル）をマスク内に少しずつ戻す（クロスフェード）=====
+      const origStrength = Math.max(0, Math.min(1, 1 - simStrength)); // 逆相
+      if (originalRGB && origStrength > 0.02) {
+        const tmpOrig = document.createElement("canvas");
+        tmpOrig.width = width; tmpOrig.height = height;
+        const octx = tmpOrig.getContext("2d")!;
+        octx.drawImage(srcCanvas, 0, 0, width, height);
+        // 見た目強調：微量スクリーンで持ち上げ
+        octx.globalAlpha = 0.15 * origStrength;
+        octx.globalCompositeOperation = "screen";
+        octx.fillStyle = "white";
+        octx.fillRect(0, 0, width, height);
+        octx.globalAlpha = 1;
+        octx.globalCompositeOperation = "source-over";
+
+        ctx.globalAlpha = Math.min(0.9, 0.4 + 0.6 * origStrength);
+        drawWithMask(ctx, tmpOrig, alphaMask, width, height);
+        ctx.globalAlpha = 1;
+      }
+
+      // ===== 切り抜き前景（fg）を最終的にのせる：被写体の存在感を固定 =====
       const fgAlpha = t < 0.5 ? easeInOutQuad(t / 0.5) : 1;
       ctx.globalAlpha = fgAlpha;
       ctx.save();
-      const px = (t - 0.5) * 10;
-      const py = (0.5 - t) * 6;
+      const px = (t - 0.5) * 8;
+      const py = (0.5 - t) * 5;
       ctx.translate(px, py);
       drawWithMask(ctx, fg, alphaMask, width, height);
       ctx.restore();

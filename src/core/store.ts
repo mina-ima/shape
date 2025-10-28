@@ -258,13 +258,13 @@ export const useStore = create<AppState>((set, get) => ({
             useEmerge = true;
             console.log("[Store] similar image fetched.");
 
-            // ▼ 追記: 入力RGBとsimilar画像からテーマ色を作る（色反映のキモ）
-            const srcAvg = averageColorOfRGB(originalRGB, inputImage.width, inputImage.height, 12); // 入力の平均色（軽量サンプリング）
-            const simAvg = averageColorOfImage(similarImage);                                      // 類似画像の平均色
-            const bgTop    = adjustHsl(mixRGB(srcAvg, simAvg, 0.3), -0.05, -0.20); // 上: 少し暗く/低彩度
-            const bgBottom = adjustHsl(mixRGB(srcAvg, simAvg, 0.6), -0.05, -0.05); // 下: やや明るめ
-            const accent   = adjustHsl(simAvg, +0.10, +0.10);                      // 光: 類似画像ベースで少し明るく
-            const tint     = mixRGB(simAvg, srcAvg, 0.5);                          // 被写体ティント: 両者の中間
+            // ▼ 入力RGBとsimilar画像からテーマ色を作る（色反映のキモ）
+            const srcAvg = averageColorOfRGB(originalRGB, inputImage.width, inputImage.height, 12);
+            const simAvg = averageColorOfImage(similarImage);
+            const bgTop    = adjustHsl(mixRGB(srcAvg, simAvg, 0.3), -0.05, -0.20);
+            const bgBottom = adjustHsl(mixRGB(srcAvg, simAvg, 0.6), -0.05, -0.05);
+            const accent   = adjustHsl(simAvg, +0.10, +0.10);
+            const tint     = mixRGB(simAvg, srcAvg, 0.5);
 
             theme = { bg1: bgTop, bg2: bgBottom, accent, subjectTint: tint };
           } catch (e) {
@@ -289,7 +289,8 @@ export const useStore = create<AppState>((set, get) => ({
             similarImage,        // 類似画像
             inputImage.width, inputImage.height,
             duration, fps,
-            theme                // ★ 色テーマを渡す
+            theme,               // ★ 色テーマを渡す
+            originalRGB          // ★ 元画像RGBを渡す ← これが重要
           );
 
           console.log("[Store] encode (stream)...");
