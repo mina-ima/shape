@@ -168,6 +168,15 @@ function buildPopKeywords(isBright: boolean): string[] {
   return base;
 }
 
+/** テロップ用ラベル（最終フレームに表示） */
+function pickLabelFromKeywords(kws: string[]): string {
+  // 簡易規則：キーワードに応じて固定ラベルを選択
+  if (kws.includes("kawaii")) return "Kawaii Character";
+  if (kws.includes("sticker")) return "Sticker Style";
+  if (kws.includes("vector") || kws.includes("flat design")) return "Cartoon Vector";
+  return "Cartoon Character";
+}
+
 export const useStore = create<AppState>((set, get) => ({
   status: "idle",
   error: null,
@@ -264,7 +273,11 @@ export const useStore = create<AppState>((set, get) => ({
             const bgBottom = adjustHsl(mixRGB(srcAvg, simAvg, 0.6), +0.10, +0.12);
             const accent   = adjustHsl(simAvg, +0.25, +0.20);
             const tint     = mixRGB(simAvg, srcAvg, 0.65); // 被写体寄りをやや強め
-            theme = { bg1: bgTop, bg2: bgBottom, accent, subjectTint: tint };
+
+            // ★ テロップ（キャラ名）をThemeへ
+            const label = pickLabelFromKeywords(kws);
+
+            theme = { bg1: bgTop, bg2: bgBottom, accent, subjectTint: tint, label };
           } catch (e) {
             console.warn("[Store] similar fetch failed, fallback to parallax.", e);
           }
@@ -281,12 +294,12 @@ export const useStore = create<AppState>((set, get) => ({
           // ストリーミング描画（フレーム配列を持たない）
           const drawer = buildEmergeDrawer(
             foreground,          // RGB 3ch
-            background,          // RGB 3ch
+            background,          // RGB 3ch（描画しないが型互換のため渡す）
             resizedMask,         // 1ch mask
             similarImage,        // 類似画像
             inputImage.width, inputImage.height,
             duration, fps,
-            theme                // 色テーマ
+            theme                // 色テーマ + label
           );
 
           let blob: Blob | null = null;
