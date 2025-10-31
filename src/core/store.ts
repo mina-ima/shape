@@ -124,7 +124,7 @@ async function resizeMaskToImage(
       const dctx = dstCanvas.getContext("2d") as any;
 
       const hasPut = sctx && typeof sctx.putImageData === "function";
-      const hasDraw = dctx && typeof dctx.drawImage === "function";
+      const hasDraw = dctx && typeof typeof dctx.drawImage === "function";
       const hasGet = dctx && typeof dctx.getImageData === "function";
       if (!hasPut || !hasDraw || !hasGet) return resizeMaskNearestNeighbor(mask, maskW, maskH, targetW, targetH);
 
@@ -289,8 +289,7 @@ export const useStore = create<AppState>((set, get) => ({
             similarImage,        // 類似画像
             inputImage.width, inputImage.height,
             duration, fps,
-            theme,               // ★ 色テーマを渡す
-            originalRGB          // ★ 元画像RGBを渡す ← これが重要
+            theme                // ★ 色テーマを渡す（※ originalRGB は渡さない）
           );
 
           console.log("[Store] encode (stream)...");
