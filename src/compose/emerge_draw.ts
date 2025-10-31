@@ -1,5 +1,5 @@
 // src/compose/emerge_draw.ts
-// ポップ＆明瞭化版：ノイズ付きソフトマスク + 白縁アウトライン + 軽いバウンス
+// ポップ＆明瞭化版：時間変化ノイズで縞抑制 + 白縁アウトライン + 軽いバウンス
 
 type U8 = Uint8Array;
 
@@ -64,13 +64,14 @@ function drawWithMask(
   const tmp = document.createElement("canvas");
   tmp.width = w; tmp.height = h;
   const tctx = tmp.getContext("2d")!;
+  // mask → source-in
   tctx.drawImage(mask as any, 0, 0, w, h);
   tctx.globalCompositeOperation = "source-in";
   tctx.drawImage(src as any, 0, 0, w, h);
   ctx.drawImage(tmp, 0, 0);
 }
 
-/* ================== 色・背景・ノイズ ================== */
+/* ================== 色・背景 ================== */
 
 function fillGradient(
   ctx: CanvasRenderingContext2D,
@@ -80,7 +81,7 @@ function fillGradient(
   c2: Theme["bg2"],
   t: number
 ) {
-  const rot = Math.sin(t * Math.PI * 2) * 0.04;
+  const rot = Math.sin(t * Math.PI * 2) * 0.04; // ±約2.3°
   const g = ctx.createLinearGradient(0, 0, 0, h);
 
   ctx.save();
@@ -99,6 +100,7 @@ function fillGradient(
 function applyTint(ctx: CanvasRenderingContext2D, color: Theme["subjectTint"], alpha = 0.30) {
   ctx.save();
   ctx.globalAlpha = alpha;
+  // 明るく寄せる：screen を採用（白地や淡色でも潰れにくい）
   ctx.globalCompositeOperation = "screen";
   ctx.fillStyle = `rgb(${color.r},${color.g},${color.b})`;
   ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
@@ -119,15 +121,36 @@ function radialAccent(ctx: CanvasRenderingContext2D, color: Theme["accent"], str
   ctx.restore();
 }
 
-function makeNoise(w: number, h: number, alpha = 0.08): HTMLCanvasElement {
+/* ================== ノイズ（縞抑制：時間変化） ================== */
+
+// 簡易PRNG（xorshift32風）
+function pseudoRandom(seed: number) {
+  let x = seed | 0;
+  return () => {
+    x ^= x << 13; x ^= x >>> 17; x ^= x << 5;
+    return ((x >>> 0) % 100000) / 100000;
+  };
+}
+
+// フレーム進行 t (0..1) をシードに反映して毎フレーム異なるノイズにする
+function makeTemporalNoise(w: number, h: number, t: number, alpha = 0.08): HTMLCanvasElement {
+  const rnd = pseudoRandom(Math.floor(t * 9973) + 12345);
   const { c, ctx } = makeCanvas(w, h);
   const id = ctx.createImageData(w, h);
-  for (let i = 0; i < w * h; i++) {
-    const v = 200 + Math.random() * 55; // 明るめノイズ
-    id.data[i * 4 + 0] = v;
-    id.data[i * 4 + 1] = v;
-    id.data[i * 4 + 2] = v;
-    id.data[i * 4 + 3] = Math.round(alpha * 255);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      // ブルーノイズっぽく：周波数ミックス＋ランダム
+      const n =
+        rnd() * 0.5 +
+        Math.sin((x * 1.7 + y * 2.3) * 0.07 + t * 6.28) * 0.25 +
+        Math.cos((x * 3.1 - y * 1.9) * 0.033 - t * 3.14) * 0.25;
+      const v = 200 + Math.max(0, Math.min(1, 0.5 + n)) * 55;
+      const i = (y * w + x) * 4;
+      id.data[i + 0] = v;
+      id.data[i + 1] = v;
+      id.data[i + 2] = v;
+      id.data[i + 3] = Math.round(alpha * 255);
+    }
   }
   ctx.putImageData(id, 0, 0);
   return c;
@@ -135,6 +158,7 @@ function makeNoise(w: number, h: number, alpha = 0.08): HTMLCanvasElement {
 
 /* ================== 形状（主軸）＆マスク生成 ================== */
 
+/** マスク(8bit)の一次/二次モーメントから主軸角度(ラジアン)を概算 */
 function principalAxisAngle(mask: U8, w: number, h: number): number {
   let m00 = 0, m10 = 0, m01 = 0, m20 = 0, m02 = 0, m11 = 0;
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
@@ -150,28 +174,29 @@ function principalAxisAngle(mask: U8, w: number, h: number): number {
 
 /**
  * 有機的な露出マスクを作る。
- * - ベース：baseAlpha を軽くブラー → エッジから内側へ“にじむ”露出
- * - ディザ：明るめノイズを lighter で重ね、バンディング（縞）を抑制
- * - 向き：主軸方向へわずかに引っ張る（線形ワイプの代替・縞出にくい）
+ * - ベース：baseAlpha をブラー → エッジから内側へ“にじむ”露出
+ * - ディザ：時間変化ノイズを加えてバンディング（縞）を抑制
+ * - 向き：主軸方向へわずかに引っ張る（線形ワイプ代替）
  */
 function buildOrganicRevealMask(
   baseAlphaMask: HTMLCanvasElement,
   w: number,
   h: number,
   angleRad: number,
-  progress01: number // 0..1
+  progress01: number, // 0..1
+  t: number           // 0..1（フレーム進行）
 ): HTMLCanvasElement {
   const p = Math.min(1, Math.max(0, progress01));
 
   // 1) baseAlpha のソフト化（ブラー量を進行で増やす）
   const { c: soft, ctx: sctx } = makeCanvas(w, h);
   sctx.save();
-  const blurPx = 2 + 24 * p;            // 2px → 26px
+  const blurPx = 2 + 24 * p; // 2px → 26px
   sctx.filter = `blur(${blurPx}px)`;
   sctx.drawImage(baseAlphaMask, 0, 0);
   sctx.restore();
 
-  // 2) 主軸方向にスライス状の微妙な偏り（にじみを方向付け：縞にならない程度）
+  // 2) 主軸方向のごく緩い明度バイアス
   const { c: dir, ctx: dctx } = makeCanvas(w, h);
   dctx.save();
   dctx.translate(w / 2, h / 2);
@@ -185,16 +210,16 @@ function buildOrganicRevealMask(
   dctx.fillRect(0, 0, w, h);
   dctx.restore();
 
-  // 3) ディザ用ノイズを加算
-  const noise = makeNoise(w, h, 0.06 + 0.06 * p);
+  // 3) 時間変化ノイズ（テンポラル・ディザ）
+  const noise = makeTemporalNoise(w, h, t, 0.06 + 0.06 * p);
 
-  // 4) soft ∩ baseAlpha ∪ ノイズ（lighter）
+  // 4) 合成：soft ∩ baseAlpha ＋ dir ＋ noise
   const { c: out, ctx: octx } = makeCanvas(w, h);
   octx.drawImage(soft, 0, 0);
   octx.globalCompositeOperation = "destination-in";
   octx.drawImage(baseAlphaMask, 0, 0);
   octx.globalCompositeOperation = "lighter";
-  octx.globalAlpha = 0.5 * (0.3 + 0.7 * p);
+  octx.globalAlpha = 0.45 + 0.35 * p;
   octx.drawImage(dir, 0, 0);
   octx.globalAlpha = 1;
   octx.drawImage(noise, 0, 0);
@@ -264,7 +289,7 @@ export function buildEmergeDrawer(
   theme?: Theme,
 ): EmergeDrawer {
   const fg = rgbaFromRGB(foregroundRGB, width, height);
-  const bg = rgbaFromRGB(backgroundRGB, width, height);
+  const bg = rgbaFromRGB(backgroundRGB, width, height); // 参照は残す（未描画）
   const alphaMask = maskCanvasFrom1ch(mask1ch, width, height);
   const total = Math.max(1, Math.round(durationSec * fps));
 
@@ -295,12 +320,13 @@ export function buildEmergeDrawer(
       const tint = useTheme ? theme!.subjectTint : fallbackTint;
 
       fillGradient(ctx, width, height, bg1, bg2, t);
-      // 以前の黒基調背景は描画しない（暗さ回避）
+      // 黒基調の背景画像は描画しない（暗さ回避）
+      // ctx.drawImage(bg, (width - bw) / 2, (height - bh) / 2, bw, bh);
       radialAccent(ctx, accent, easeOutCubic(t) * 0.6);
 
-      // 露出マスク（縞抑制）
+      // 露出マスク（縞抑制：時間変化ノイズ）
       const show = t < 0.55 ? easeInOutQuad(t / 0.55) : 1;
-      const revealMask = buildOrganicRevealMask(alphaMask, width, height, angle, show);
+      const revealMask = buildOrganicRevealMask(alphaMask, width, height, angle, show, t);
 
       // 類似画像（軽いバウンス動作）
       const bounce = t < 0.7 ? easeOutBack(Math.min(1, t / 0.7)) : 1 - 0.08 * (t - 0.7) / 0.3;
@@ -318,6 +344,7 @@ export function buildEmergeDrawer(
       sctx.translate(-width / 2, -height / 2);
       sctx.drawImage(similar as any, (width - sw) / 2, (height - sh) / 2, sw, sh);
       sctx.restore();
+      // 合成は screen。強すぎる白潰れを避けるため α をやや低めに
       applyTint(sctx, tint, 0.22 + 0.18 * show);
 
       drawWithMask(ctx, tmp, revealMask, width, height);
@@ -326,7 +353,7 @@ export function buildEmergeDrawer(
       const fgAlpha = t < 0.5 ? easeInOutQuad(t / 0.5) * 0.7 : 0.7 + 0.3 * (t - 0.5) * 2;
       ctx.globalAlpha = Math.min(1, fgAlpha);
       ctx.save();
-      const px = (t - 0.5) * 8;
+      const px = (t - 0.5) * 8;   // 微パララックス
       const py = (0.5 - t) * 5;
       ctx.translate(px, py);
       drawWithMask(ctx, fg, alphaMask, width, height);

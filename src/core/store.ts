@@ -6,16 +6,13 @@ import { imageBitmapToUint8Array, createSolidColorImageBitmap } from "../lib/ima
 import { generateLayers, generateParallaxFrames } from "../compose/parallax";
 import { generateEmergeFrames } from "../compose/emerge";
 import { fetchSimilarFromUnsplash } from "../similar/fetchSimilar";
-import {
-  processImage,
-  CameraPermissionDeniedError,
-} from "../camera";
+import { processImage, CameraPermissionDeniedError } from "../camera";
 
-// ★ 追加：ストリーミング描画・エンコード
+// ストリーミング描画・エンコード
 import { buildEmergeDrawer } from "../compose/emerge_draw";
 import { encodeWithMediaRecorderDraw } from "../encode/mediarec";
 
-// ★ 追加：色ユーティリティ＆Theme型
+// 色ユーティリティ＆Theme型
 import { averageColorOfRGB, averageColorOfImage, adjustHsl, mixRGB } from "../lib/color";
 import type { Theme } from "../compose/emerge_draw";
 
@@ -43,7 +40,9 @@ export type AppState = {
   _setError: (msg: string) => void;
 };
 
-/** 型ユーティリティ */
+/** ========= ユーティリティ ========= */
+
+// 各種配列→Uint8
 function normalizeToUint8(
   src:
     | Uint8Array
@@ -69,29 +68,19 @@ function normalizeToUint8(
   const len = (src as any).byteLength ?? (buf ? buf.byteLength - off : 0);
   return new Uint8Array(buf, off, len);
 }
+
+// RGBA→RGB（A捨て）
 function rgbaToRgb(rgba: Uint8Array, width: number, height: number): Uint8Array {
   const rgb = new Uint8Array(width * height * 3);
   for (let i = 0, j = 0; i < rgb.length; i += 3, j += 4) {
     rgb[i] = rgba[j];
-    rgb[i + 1] = rgba[j+1];
-    rgb[i + 2] = rgba[j+2];
+    rgb[i + 1] = rgba[j + 1];
+    rgb[i + 2] = rgba[j + 2];
   }
   return rgb;
 }
-function mask1chToImageData(mask: Uint8Array, width: number, height: number): ImageData {
-  const rgba = new Uint8ClampedArray(width * height * 4);
-  for (let i = 0, j = 0; i < mask.length; i++, j += 4) {
-    const v = mask[i];
-    rgba[j] = v; rgba[j + 1] = v; rgba[j + 2] = v; rgba[j + 3] = 255;
-  }
-  return new ImageData(rgba, width, height);
-}
-function imageDataToMask1ch(img: ImageData): Uint8Array {
-  const { data, width, height } = img;
-  const out = new Uint8Array(width * height);
-  for (let i = 0, j = 0; i < out.length; i++, j += 4) out[i] = data[j];
-  return out;
-}
+
+// 近傍補間のNN版（フォールバック）
 function resizeMaskNearestNeighbor(
   mask: Uint8Array, maskW: number, maskH: number, targetW: number, targetH: number,
 ): Uint8Array {
@@ -105,6 +94,8 @@ function resizeMaskNearestNeighbor(
   }
   return out;
 }
+
+// 高品質リサイズ（可能ならCanvas）
 async function resizeMaskToImage(
   mask: Uint8Array, maskW: number, maskH: number, targetW: number, targetH: number,
 ): Promise<Uint8Array> {
@@ -114,26 +105,36 @@ async function resizeMaskToImage(
 
   if (hasOffscreen || canUseDOM) {
     try {
-      const srcImage = mask1chToImageData(mask, maskW, maskH);
+      // 1ch→ImageData
+      const rgba = new Uint8ClampedArray(maskW * maskH * 4);
+      for (let i = 0, j = 0; i < mask.length; i++, j += 4) {
+        const v = mask[i];
+        rgba[j] = v; rgba[j + 1] = v; rgba[j + 2] = v; rgba[j + 3] = 255;
+      }
+      const srcImage = new ImageData(rgba, maskW, maskH);
+
       const srcCanvas: any = hasOffscreen ? new OffscreenCanvas(maskW, maskH) : document.createElement("canvas");
       srcCanvas.width = maskW; srcCanvas.height = maskH;
       const sctx = srcCanvas.getContext("2d") as any;
+      sctx.putImageData(srcImage, 0, 0);
 
       const dstCanvas: any = hasOffscreen ? new OffscreenCanvas(targetW, targetH) : document.createElement("canvas");
       dstCanvas.width = targetW; dstCanvas.height = targetH;
       const dctx = dstCanvas.getContext("2d") as any;
 
       const hasPut = sctx && typeof sctx.putImageData === "function";
-      const hasDraw = dctx && typeof dctx.drawImage === "function"; // ← タイポ修正
+      const hasDraw = dctx && typeof dctx.drawImage === "function";
       const hasGet = dctx && typeof dctx.getImageData === "function";
       if (!hasPut || !hasDraw || !hasGet) return resizeMaskNearestNeighbor(mask, maskW, maskH, targetW, targetH);
 
-      sctx.putImageData(srcImage, 0, 0);
       dctx.imageSmoothingEnabled = true;
       dctx.imageSmoothingQuality = "high";
       dctx.drawImage(srcCanvas, 0, 0, targetW, targetH);
+
       const dstImage = dctx.getImageData(0, 0, targetW, targetH);
-      return imageDataToMask1ch(dstImage);
+      const out = new Uint8Array(targetW * targetH);
+      for (let i = 0, j = 0; i < out.length; i++, j += 4) out[i] = dstImage.data[j];
+      return out;
     } catch {
       return resizeMaskNearestNeighbor(mask, maskW, maskH, targetW, targetH);
     }
@@ -141,27 +142,30 @@ async function resizeMaskToImage(
   return resizeMaskNearestNeighbor(mask, maskW, maskH, targetW, targetH);
 }
 
-/** 撮影画像から類推する検索キーワード（超簡易） */
-function guessKeywordsForUnsplash(maskW: number, maskH: number, imageW: number, imageH: number): string[] {
-  const ar = imageH > 0 ? imageW / imageH : 1;
-  const maskAR = maskH > 0 ? maskW / maskH : 1;
-  const base = ["portrait", "subject", "clean background"];
-  const isPortrait = ar < 1.0;
-  const kws: string[] = [];
+/** 平均輝度（0..255）。青空など明るい画像なら 160 以上になりやすい。 */
+function averageLuma(rgb: Uint8Array, w: number, h: number, step = 12): number {
+  let sum = 0, n = 0;
+  for (let y = 0; y < h; y += step) {
+    for (let x = 0; x < w; x += step) {
+      const i = (y * w + x) * 3;
+      const r = rgb[i], g = rgb[i + 1], b = rgb[i + 2];
+      sum += 0.299 * r + 0.587 * g + 0.114 * b; // Rec.601 近似
+      n++;
+    }
+  }
+  return n ? sum / n : 200;
+}
 
-  // 形状ヒント（ラフ）
-  if (maskAR < 0.8) kws.push("tall");
-  else if (maskAR > 1.2) kws.push("wide");
-
-  // ユーザー要望：動物 or キャラ（論理演算子を使わず別単語で）
-  kws.push("animal");
-  kws.push("character");
-
-  // 構図
-  if (isPortrait) kws.push("portrait");
-  else kws.push("center composition");
-
-  return [...new Set([...kws, ...base])];
+/** ポップ寄りのキーワード（実写回避・明るい方向） */
+function buildPopKeywords(isBright: boolean): string[] {
+  const base = [
+    "illustration", "cartoon", "character", "kawaii",
+    "pastel", "flat design", "vector", "sticker",
+    "bright", "pop", "sky", "blue sky"
+  ];
+  if (isBright) base.push("white background", "clean", "high key");
+  // 実写寄り語は入れない（animalなどは除外）
+  return base;
 }
 
 export const useStore = create<AppState>((set, get) => ({
@@ -195,7 +199,6 @@ export const useStore = create<AppState>((set, get) => ({
     const { unsplashApiKey } = get();
 
     set({ status: "processing", error: null });
-    console.log("[Store] Status set to processing.");
 
     const nextResolution = (current: number) => {
       if (current >= 720) return 540;
@@ -209,64 +212,58 @@ export const useStore = create<AppState>((set, get) => ({
         set({ retryCount: attemptNo, processingResolution: resolution });
 
         // 1) 前処理
-        console.log("[Store] preprocess...");
         const processedImage = await processImage(inputImage);
 
         // 2) セグメンテーション
-        console.log("[Store] segmentation...");
         const seg = await runSegmentation(processedImage);
-        console.log("[Store] segmentation done");
-
         const rawMaskData = (seg as any)?.mask?.data ?? (seg as any)?.mask ?? (seg as any);
         const maskW = (seg as any)?.mask?.width ?? (seg as any)?.inputSize?.w ?? 320;
         const maskH = (seg as any)?.mask?.height ?? (seg as any)?.inputSize?.h ?? 320;
 
         // 3) マスク正規化 → 入力サイズへ拡大
-        console.log("[Store] resize mask...");
         const maskUint8 = normalizeToUint8(rawMaskData);
         const resizedMask = await resizeMaskToImage(maskUint8, maskW, maskH, inputImage.width, inputImage.height);
 
         // 4) 元画像/背景のRGB化
-        console.log("[Store] prepare RGB layers...");
         const origBytesRGBA = normalizeToUint8(await imageBitmapToUint8Array(inputImage));
         const originalRGB = rgbaToRgb(origBytesRGBA, inputImage.width, inputImage.height);
 
-        // ★ parallax ルートでも暗くならないよう白背景に
+        // parallax ルートでも暗くならないよう白背景に固定
         const bgBitmap = await createSolidColorImageBitmap(inputImage.width, inputImage.height, "#ffffff");
         const bgBytesRGBA = normalizeToUint8(await imageBitmapToUint8Array(bgBitmap));
         const backgroundRGB = rgbaToRgb(bgBytesRGBA, bgBitmap.width, bgBitmap.height);
 
-        // 5) レイヤ生成（従来の前景/背景）
-        console.log("[Store] generate layers...");
+        // 5) レイヤ生成
         const { foreground, background } = await generateLayers(
           originalRGB, inputImage.width, inputImage.height,
           resizedMask, inputImage.width, inputImage.height,
           backgroundRGB, bgBitmap.width, bgBitmap.height,
         );
 
-        // 6) 類似画像取得（あれば emerge ルート、ダメなら parallax）
+        // 6) 類似画像取得（ポップ寄り）
         let useEmerge = false;
         let similarImage: HTMLImageElement | null = null;
-        // ★ テーマ（後でdrawerに渡す）
         let theme: Theme | undefined = undefined;
 
         if (unsplashApiKey) {
           try {
-            console.log("[Store] fetch similar from Unsplash...");
-            const kws = guessKeywordsForUnsplash(maskW, maskH, inputImage.width, inputImage.height);
-            const { image } = await fetchSimilarFromUnsplash(unsplashApiKey, kws, { orientation: "portrait" });
+            const luma = averageLuma(originalRGB, inputImage.width, inputImage.height, 12);
+            const kws = buildPopKeywords(luma > 160);
+            const { image } = await fetchSimilarFromUnsplash(unsplashApiKey, kws, {
+              orientation: "portrait",
+              // 将来の拡張ヒント（対応しなくても無害）
+              style: "illustration",
+            } as any);
             similarImage = image;
             useEmerge = true;
-            console.log("[Store] similar image fetched.");
 
-            // ▼ 入力RGBとsimilar画像からテーマ色を作る（明るめポップに反転）
+            // テーマ生成：明度/彩度を底上げ（ポップ寄り）
             const srcAvg = averageColorOfRGB(originalRGB, inputImage.width, inputImage.height, 12);
             const simAvg = averageColorOfImage(similarImage);
-            const bgTop    = adjustHsl(mixRGB(srcAvg, simAvg, 0.3), +0.05, +0.15);
-            const bgBottom = adjustHsl(mixRGB(srcAvg, simAvg, 0.6), +0.08, +0.10);
-            const accent   = adjustHsl(simAvg, +0.20, +0.15);
-            const tint     = mixRGB(simAvg, srcAvg, 0.6); // 被写体寄りを少し強める
-
+            const bgTop    = adjustHsl(mixRGB(srcAvg, simAvg, 0.3), +0.08, +0.18);
+            const bgBottom = adjustHsl(mixRGB(srcAvg, simAvg, 0.6), +0.10, +0.12);
+            const accent   = adjustHsl(simAvg, +0.25, +0.20);
+            const tint     = mixRGB(simAvg, srcAvg, 0.65); // 被写体寄りをやや強め
             theme = { bg1: bgTop, bg2: bgBottom, accent, subjectTint: tint };
           } catch (e) {
             console.warn("[Store] similar fetch failed, fallback to parallax.", e);
@@ -281,8 +278,7 @@ export const useStore = create<AppState>((set, get) => ({
         const duration = isMobile ? 4 : 5;
 
         if (useEmerge && similarImage) {
-          // ★ ストリーミング描画：フレーム配列を保持しない
-          console.log("[Store] generate frames (stream-drawer)...");
+          // ストリーミング描画（フレーム配列を持たない）
           const drawer = buildEmergeDrawer(
             foreground,          // RGB 3ch
             background,          // RGB 3ch
@@ -290,10 +286,9 @@ export const useStore = create<AppState>((set, get) => ({
             similarImage,        // 類似画像
             inputImage.width, inputImage.height,
             duration, fps,
-            theme                // ★ 色テーマ（originalRGB は渡さない）
+            theme                // 色テーマ
           );
 
-          console.log("[Store] encode (stream)...");
           let blob: Blob | null = null;
           try {
             blob = await encodeWithMediaRecorderDraw(
@@ -306,8 +301,7 @@ export const useStore = create<AppState>((set, get) => ({
           }
 
           if (!blob || blob.size < 10_000) {
-            // 最後の手段：従来の配列版（必要最小限のみ）
-            console.log("[Store] stream encode failed; fallback to frames array.");
+            // フォールバック：配列版
             const frames = await generateEmergeFrames(
               foreground, background, resizedMask, similarImage,
               inputImage.width, inputImage.height, duration, fps
@@ -335,28 +329,20 @@ export const useStore = create<AppState>((set, get) => ({
           }
 
           set({ status: "success", error: null, retryCount: attemptNo });
-          console.log("[Store] attempt successful (stream).");
           return;
         } else {
-          // parallax ルート（従来通り）
-          console.log("[Store] generate frames (parallax)...");
+          // parallax ルート
           const frames = await generateParallaxFrames(
             foreground, background,
             inputImage.width, inputImage.height,
             duration, fps,
           );
-          console.log("[Store] frames ready:", frames.length);
-
-          console.log("[Store] encode...");
           let meta = await encodeVideoWithMeta(frames as any, { fps });
-          console.log("[Result] first encode:", { mime: meta?.mime, size: meta?.blob?.size, filename: meta?.filename });
 
           const MIN_BYTES = 10_000;
           if (!meta?.blob || meta.blob.size < MIN_BYTES) {
-            console.warn("[Encode] Blob too small or empty. Retrying with alternate mime...");
             const altMime = meta?.mime === "video/mp4" ? "video/webm" : "video/mp4";
             meta = await encodeVideoWithMeta(frames as any, { fps, preferredMime: altMime });
-            console.log("[Result] alt encode:", { mime: meta?.mime, size: meta?.blob?.size, filename: meta?.filename });
           }
           if (!meta?.blob || meta.blob.size < MIN_BYTES) {
             throw new Error("Video encoding failed: empty or too small blob.");
@@ -367,10 +353,8 @@ export const useStore = create<AppState>((set, get) => ({
             generatedVideoMimeType: meta.mime,
             result: { blob: meta.blob, filename: meta.filename, mime: meta.mime },
           });
-          console.log("[Store] encode done: size=", meta.blob.size, "mime=", meta.mime);
 
           set({ status: "success", error: null, retryCount: attemptNo });
-          console.log("[Store] attempt successful.");
           return;
         }
       } catch (err) {
@@ -382,7 +366,6 @@ export const useStore = create<AppState>((set, get) => ({
             : typeof err === "string"
             ? err
             : "Unknown error";
-        console.warn("[Store] attempt error:", message);
 
         if (err instanceof CameraPermissionDeniedError) {
           set({ status: "error", error: message, retryCount: attemptNo, result: undefined });
@@ -391,7 +374,6 @@ export const useStore = create<AppState>((set, get) => ({
 
         if (attemptNo >= MAX_RETRIES) {
           set({ status: "error", error: message, retryCount: MAX_RETRIES, result: undefined });
-          console.log("[Store] attempt failed (max retries reached). Status:", get().status);
           return;
         }
 
@@ -403,7 +385,6 @@ export const useStore = create<AppState>((set, get) => ({
           status: "processing",
           result: undefined,
         });
-        console.log("[Store] attempt failed (retrying). Status:", get().status);
 
         await new Promise<void>((resolve) => {
           setTimeout(() => { attempt(nextRes, attemptNo + 1).then(resolve); }, 1000);
