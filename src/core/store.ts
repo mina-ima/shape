@@ -124,7 +124,7 @@ async function resizeMaskToImage(
       const dctx = dstCanvas.getContext("2d") as any;
 
       const hasPut = sctx && typeof sctx.putImageData === "function";
-      const hasDraw = dctx && typeof typeof dctx.drawImage === "function";
+      const hasDraw = dctx && typeof dctx.drawImage === "function"; // ← タイポ修正
       const hasGet = dctx && typeof dctx.getImageData === "function";
       if (!hasPut || !hasDraw || !hasGet) return resizeMaskNearestNeighbor(mask, maskW, maskH, targetW, targetH);
 
@@ -231,7 +231,8 @@ export const useStore = create<AppState>((set, get) => ({
         const origBytesRGBA = normalizeToUint8(await imageBitmapToUint8Array(inputImage));
         const originalRGB = rgbaToRgb(origBytesRGBA, inputImage.width, inputImage.height);
 
-        const bgBitmap = await createSolidColorImageBitmap(inputImage.width, inputImage.height, "#000000");
+        // ★ parallax ルートでも暗くならないよう白背景に
+        const bgBitmap = await createSolidColorImageBitmap(inputImage.width, inputImage.height, "#ffffff");
         const bgBytesRGBA = normalizeToUint8(await imageBitmapToUint8Array(bgBitmap));
         const backgroundRGB = rgbaToRgb(bgBytesRGBA, bgBitmap.width, bgBitmap.height);
 
@@ -258,13 +259,13 @@ export const useStore = create<AppState>((set, get) => ({
             useEmerge = true;
             console.log("[Store] similar image fetched.");
 
-            // ▼ 入力RGBとsimilar画像からテーマ色を作る（色反映のキモ）
+            // ▼ 入力RGBとsimilar画像からテーマ色を作る（明るめポップに反転）
             const srcAvg = averageColorOfRGB(originalRGB, inputImage.width, inputImage.height, 12);
             const simAvg = averageColorOfImage(similarImage);
-            const bgTop    = adjustHsl(mixRGB(srcAvg, simAvg, 0.3), -0.05, -0.20);
-            const bgBottom = adjustHsl(mixRGB(srcAvg, simAvg, 0.6), -0.05, -0.05);
-            const accent   = adjustHsl(simAvg, +0.10, +0.10);
-            const tint     = mixRGB(simAvg, srcAvg, 0.5);
+            const bgTop    = adjustHsl(mixRGB(srcAvg, simAvg, 0.3), +0.05, +0.15);
+            const bgBottom = adjustHsl(mixRGB(srcAvg, simAvg, 0.6), +0.08, +0.10);
+            const accent   = adjustHsl(simAvg, +0.20, +0.15);
+            const tint     = mixRGB(simAvg, srcAvg, 0.6); // 被写体寄りを少し強める
 
             theme = { bg1: bgTop, bg2: bgBottom, accent, subjectTint: tint };
           } catch (e) {
@@ -289,7 +290,7 @@ export const useStore = create<AppState>((set, get) => ({
             similarImage,        // 類似画像
             inputImage.width, inputImage.height,
             duration, fps,
-            theme                // ★ 色テーマを渡す（※ originalRGB は渡さない）
+            theme                // ★ 色テーマ（originalRGB は渡さない）
           );
 
           console.log("[Store] encode (stream)...");

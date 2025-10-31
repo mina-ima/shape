@@ -98,10 +98,11 @@ function fillGradient(
   ctx.restore();
 }
 
-function applyTint(ctx: CanvasRenderingContext2D, color: Theme["subjectTint"], alpha = 0.35) {
+function applyTint(ctx: CanvasRenderingContext2D, color: Theme["subjectTint"], alpha = 0.30) {
   ctx.save();
   ctx.globalAlpha = alpha;
-  ctx.globalCompositeOperation = "overlay";
+  // 明るく寄せる：screen を採用（白地や淡色でも潰れにくい）
+  ctx.globalCompositeOperation = "screen";
   ctx.fillStyle = `rgb(${color.r},${color.g},${color.b})`;
   ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
   ctx.restore();
@@ -238,9 +239,10 @@ export function buildEmergeDrawer(
   const total = Math.max(1, Math.round(durationSec * fps));
 
   const useTheme = !!theme;
-  const fallbackBg1 = { r: 10, g: 10, b: 14 };
-  const fallbackBg2 = { r: 38, g: 38, b: 46 };
-  const fallbackAccent = { r: 120, g: 170, b: 255 };
+  // 明るいパステル基調（ポップ寄せ）
+  const fallbackBg1 = { r: 240, g: 245, b: 255 };
+  const fallbackBg2 = { r: 255, g: 252, b: 240 };
+  const fallbackAccent = { r: 255, g: 170, b: 220 };
   const fallbackTint = { r: 255, g: 255, b: 255 };
 
   // 主軸角度（マスク配列から事前計算）
@@ -263,13 +265,14 @@ export function buildEmergeDrawer(
       const tint = useTheme ? theme!.subjectTint : fallbackTint;
 
       fillGradient(ctx, width, height, bg1, bg2, t);
-      ctx.drawImage(bg, (width - bw) / 2, (height - bh) / 2, bw, bh);
+      // 黒ベースの背景画像は暗くなるため描画しない（グラデ主体）
+      // ctx.drawImage(bg, (width - bw) / 2, (height - bh) / 2, bw, bh);
       radialAccent(ctx, accent, easeOutCubic(t) * 0.6);
 
       // 類似画像の“形状に沿った”露出
-      // 0.0→0.6で輪郭から中身へ、0.6→1.0は定着＆微ズーム
-      const show = t < 0.6 ? easeInOutQuad(t / 0.6) : 1;
-      const edgeBias = (1 - Math.min(1, t / 0.6)) * 0.35 + 0.1; // 序盤は輪郭寄り
+      // 早めに全体像を見せて“お化け感”を減らす
+      const show = t < 0.5 ? easeInOutQuad(t / 0.5) : 1;
+      const edgeBias = (1 - Math.min(1, t / 0.5)) * 0.18 + 0.06;
       const revealMask = buildDirectionalWipeMask(alphaMask, width, height, angle, show, edgeBias);
 
       // 類似画像はマスク内のみ。ティントを掛けて色を寄せる。
@@ -281,7 +284,8 @@ export function buildEmergeDrawer(
       const sw = Math.round(width * scale);
       const sh = Math.round(height * scale);
       sctx.drawImage(similar as any, (width - sw) / 2, (height - sh) / 2, sw, sh);
-      applyTint(sctx, tint, 0.28 + 0.22 * show);
+      // 合成は screen。強すぎる白潰れを避けるため α をやや低めに
+      applyTint(sctx, tint, 0.22 + 0.18 * show);
 
       drawWithMask(ctx, tmp, revealMask, width, height);
 
