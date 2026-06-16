@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>shape 取扱説明書</title>
+<style>:root{--fg:#1a1a1a;--muted:#666;--accent:#2563eb;--bg:#fff;--code:#f4f4f5;--border:#e5e7eb}*{box-sizing:border-box}body{font-family:-apple-system,"Hiragino Kaku Gothic ProN","Yu Gothic",Meiryo,sans-serif;line-height:1.8;color:var(--fg);background:var(--bg);max-width:820px;margin:0 auto;padding:24px 18px}h1{font-size:1.7rem;border-bottom:3px solid var(--accent);padding-bottom:.4em;margin-top:0}h2{font-size:1.3rem;margin-top:2em;border-left:5px solid var(--accent);padding-left:.5em}h3{font-size:1.1rem;margin-top:1.5em}code{background:var(--code);padding:.15em .4em;border-radius:4px;font-size:.9em}pre{background:var(--code);padding:14px;border-radius:8px;overflow-x:auto}pre code{background:none;padding:0}table{border-collapse:collapse;width:100%;margin:1em 0}th,td{border:1px solid var(--border);padding:8px 10px;text-align:left}th{background:#f8fafc}blockquote{border-left:4px solid var(--accent);background:#f0f6ff;margin:1em 0;padding:.6em 1em;color:#334}a{color:var(--accent)}img{max-width:100%}footer{margin-top:3em;padding-top:1em;border-top:1px solid var(--border);color:var(--muted);font-size:.85rem}@media(max-width:600px){body{padding:16px 12px}h1{font-size:1.4rem}}</style>
+</head>
+<body>
+<h3>アプリケーション取扱説明書</h3>
+<h4>1. はじめに</h4>
+<p>このアプリケーションは、お手持ちの1枚の画像から、背景が動く2.5Dパララックス風のショート動画を自動で生成するツールです。すべての処理はブラウザ内で完結するため、あなたの画像がサーバーにアップロードされることはありません。</p>
+<h4>2. ご利用の前に（準備）</h4>
+<p>動画の背景画像を検索するために、<code>Unsplash</code> というサービスのAPIキーが必要です。</p>
+<ul>
+<li><strong>必要なもの</strong>: Unsplash APIキー</li>
+<li><strong>取得方法</strong>: <a href="https://unsplash.com/developers">Unsplash Developers</a> にてアカウントを登録し、APIキーを取得してください。</li>
+</ul>
+<h4>3. 基本的な使い方</h4>
+<p><strong>STEP 1: APIキーを設定する</strong></p>
+<ul>
+<li>アプリケーションのURLを開く際に、URLの末尾に <code>#unsplash_api_key=あなたのAPIキー</code> を追加してアクセスします。</li>
+<li><strong>例</strong>: <code>https://shape-peach.vercel.app/#unsplash_api_key=xxxxxxxxxxxx</code></li>
+<li>画面に「Unsplash API Key: 設定済み」と緑色で表示されれば成功です。</li>
+</ul>
+<p><strong>STEP 2: 画像を用意する</strong></p>
+<ul>
+<li><strong>ファイルから選ぶ場合</strong>: <code>ファイルを選択</code> ボタンを押し、お使いのPCやスマートフォンから画像を選択します。</li>
+<li><strong>カメラで撮る場合</strong>: <code>カメラで撮影</code> ボタンを押し、表示された画面の「撮影」ボタンで写真を撮ります。</li>
+<li>画像が読み込まれると、ボタンの下に画像のサイズ（例: <code>選択中の画像: 1920x1080</code>）が表示されます。</li>
+</ul>
+<p><strong>STEP 3: 動画を生成する</strong></p>
+<ul>
+<li><code>撮影/選択</code> ボタンを押して、動画の生成を開始します。</li>
+<li>ボタンが <code>処理中...</code> という表示に変わり、ローディングアニメーションが始まります。</li>
+<li><strong>ご注意</strong>: 処理には数分かかる場合があります。完了までブラウザを閉じずにお待ちください。</li>
+</ul>
+<p><strong>STEP 4: 結果の確認</strong></p>
+<ul>
+<li>処理が完了すると「成功!」というメッセージと共に、生成された動画が表示されます。（※現在のバージョンでは動画はまだ表示されません）</li>
+<li><code>もう一度</code> ボタンを押すと、最初の状態に戻ります。</li>
+</ul>
+<h4>4. よくある質問 (FAQ)</h4>
+<p><strong>Q. APIキーを設定しても「未設定」と表示されます。</strong><br>
+A. URLの形式が正しいかもう一度ご確認ください。URLの末尾は <code>/#unsplash_api_key=...</code> となっていますか？入力後、ページを再読み込みしてみてください。</p>
+<p><strong>Q. カメラが起動しません / 真っ暗になります。</strong><br>
+A. お使いのブラウザの設定で、このサイトへのカメラアクセスが「許可」されているかご確認ください。</p>
+<p><strong>Q. 「エラー」と表示されて処理が止まります。</strong><br>
+A. ネットワーク接続が安定しているかご確認ください。また、別の画像（被写体がはっきりしているものなど）で試すと成功する場合があります。</p>
+<footer>このページは Markdown 版取説 (MANUAL.md) から自動生成されました。</footer>
+</body>
+</html>
